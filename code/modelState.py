@@ -1,37 +1,163 @@
-#Settlers of Catan
-#Model state class for AI training 
-# TO-DO
-
-from board import *
-from catanGame import *
-from player import *
-from heuristicAIPlayer import *
+import json
+# from board import catanBoard # Assuming catanBoard is in board.py
+# from player import player # Assuming player is in player.py
 
 class modelState():
-    '''Define the variables needed by the RL model using a state and action object
-    STATE: 
-    Vertices: Array of length 54, use 0 for empty, -1/-2 for adversary, +1/+2 for self (settlements/cities)
-    Edges/Roads: Array of length ___, use 0 for empty, -1 for adversary, +1 for self
-    Victory Points: Array of length num_players, use value between 0 and 10
-    HexTiles: Tuple array with resource and number
-    NumPlayerCards: Array of length num_players, with number of total cards each player has - dev cards and resource cards
-    Robber location: Current location of robber - hexTile
+    def __init__(self, catan_game, current_player):
+        self.board = self.get_board_state(catan_game.board)
+        self.players = self.get_players_state(catan_game.playerQueue.queue, current_player, catan_game.board)
+        self.current_player_name = current_player.name
+        # Determine game phase based on a typical Catan rule:
+        # Setup phase is usually when players have less than 2 settlements.
+        # This might need adjustment based on actual game logic in catanGame.py
+        is_setup_phase = True
+        if hasattr(current_player, 'buildGraph') and len(current_player.buildGraph.get('SETTLEMENTS', [])) >= 2:
+            # A more robust check might involve looking at all players or a game phase variable in catan_game
+            is_setup_phase = False
+            if hasattr(catan_game, 'gameSetup'): # Prefer explicit game state if available
+                 is_setup_phase = catan_game.gameSetup
 
-    ACTIONS:(under resource constraints)
-    Build: Build City, Settlement, Road 
-    Draw Dev Card: Draw a development card
-    Play Dev Card: Play a development card
-    Trade: Trade with Bank (Port option included) or with other players
-    '''
-    def __init__(self, catan_game):
+        self.game_phase = "setup" if is_setup_phase else "main"
+
+    def get_board_state(self, board_obj):
+        hexes = []
+        robber_location_hex_index = -1
+        for hex_index, hex_tile in board_obj.hexTileDict.items():
+            hexes.append({
+                "hex_index": hex_tile.index,
+                "resource_type": hex_tile.resource.type if hex_tile.resource else "NONE", # Desert has no resource type
+                "roll_number": hex_tile.resource.num if hex_tile.resource and hex_tile.resource.num is not None else 0, # Desert roll num is None
+            })
+            if hex_tile.robber:
+                robber_location_hex_index = hex_tile.index
+
+        ports = []
+        # Create a reverse mapping from pixel coordinates to vertex index for easier lookup
+        pixel_to_vertex_index_map = {v_pixel: v_idx for v_idx, v_pixel in board_obj.vertex_index_to_pixel_dict.items()}
+
+        for vertex_pixel, vertex_obj in board_obj.boardGraph.items():
+            if vertex_obj.port and vertex_obj.port != False:
+                port_info = {
+                    "type": vertex_obj.port,
+                    "vertex_indices": [] # Store all vertices making up this port location
+                }
+                # Find if this port type already exists to append vertex index
+                existing_port = next((p for p in ports if p["type"] == vertex_obj.port), None)
+                if existing_port:
+                    if pixel_to_vertex_index_map.get(vertex_pixel) not in existing_port["vertex_indices"]:
+                         existing_port["vertex_indices"].append(pixel_to_vertex_index_map.get(vertex_pixel))
+                else:
+                    port_info["vertex_indices"].append(pixel_to_vertex_index_map.get(vertex_pixel))
+                    ports.append(port_info)
         
-        self.vertexState = [0]*54
-        self.edgeState = [0]
+        # Sort vertex_indices in each port for consistent output
+        for port_entry in ports:
+            port_entry["vertex_indices"].sort()
 
-        self.actionList = []
+        return {
+            "hexes": sorted(hexes, key=lambda h: h["hex_index"]), # Sort for consistency
+            "ports": sorted(ports, key=lambda p: p["type"]), # Sort for consistency
+            "robber_location_hex_index": robber_location_hex_index
+        }
 
-        print("Array length", len(self.vertexState))
+    def get_players_state(self, players_queue, current_player, board_obj):
+        player_states = []
+        # Create a reverse mapping from pixel coordinates to vertex index for easier lookup if not already done
+        pixel_to_vertex_index_map = {v_pixel: v_idx for v_idx, v_pixel in board_obj.vertex_index_to_pixel_dict.items()}
+
+        for p in list(players_queue): # Convert queue to list for iteration
+            settlements_indices = sorted([pixel_to_vertex_index_map.get(s_coord) for s_coord in p.buildGraph.get('SETTLEMENTS', []) if pixel_to_vertex_index_map.get(s_coord) is not None])
+            cities_indices = sorted([pixel_to_vertex_index_map.get(c_coord) for c_coord in p.buildGraph.get('CITIES', []) if pixel_to_vertex_index_map.get(c_coord) is not None])
+
+            roads_indices = []
+            for r_tuple in p.buildGraph.get('ROADS', []):
+                v1_idx = pixel_to_vertex_index_map.get(r_tuple[0])
+                v2_idx = pixel_to_vertex_index_map.get(r_tuple[1])
+                if v1_idx is not None and v2_idx is not None:
+                    # Sort to ensure consistent representation (e.g., (1,2) is same as (2,1))
+                    road_pair = tuple(sorted((v1_idx, v2_idx)))
+                    roads_indices.append(road_pair)
+            roads_indices = sorted(list(set(roads_indices))) # Remove duplicates and sort
+
+            player_states.append({
+                "name": p.name,
+                "color": p.color,
+                "resources": p.resources, # Assuming this is a dict like {'WOOD': 1, 'BRICK': 0, ...}
+                "dev_cards": p.devCards, # Assuming this is a dict like {'KNIGHT': 0, ...}
+                "settlements_vertex_indices": settlements_indices,
+                "cities_vertex_indices": cities_indices,
+                "roads_vertex_indices_pairs": roads_indices,
+                "victory_points": p.victoryPoints,
+                "knights_played": p.knightsPlayed,
+                "largest_army": p.largestArmyFlag,
+                "longest_road": p.longestRoadFlag,
+                "is_current_player": p.name == current_player.name
+            })
+        return sorted(player_states, key=lambda ps: ps["name"]) # Sort for consistency
+
+    def to_json(self):
+        return json.dumps(self, default=lambda o: o.__dict__, indent=4, sort_keys=True)
+
+if __name__ == '__main__':
+    # This section is for example and testing; it would require mock objects
+    # print("modelState class defined.")
+    # class MockPlayer:
+    #     def __init__(self, name, color, vp, is_current=False):
+    #         self.name = name
+    #         self.color = color
+    #         self.victoryPoints = vp
+    #         self.resources = {'WOOD': 2, 'BRICK': 1, 'SHEEP': 1, 'WHEAT': 0, 'ORE': 0}
+    #         self.devCards = {'KNIGHT': 1, 'VP': 0}
+    #         self.buildGraph = {'ROADS':[], 'SETTLEMENTS':[], 'CITIES':[]}
+    #         self.knightsPlayed = 0
+    #         self.largestArmyFlag = False
+    #         self.longestRoadFlag = False
+    #         self.is_current_player = is_current
+
+    # class MockHexTile:
+    #     def __init__(self, index, resource_type, roll_number, robber=False):
+    #         self.index = index
+    #         self.resource = self if resource_type else None # Simplification for attribute access
+    #         self.type = resource_type
+    #         self.num = roll_number
+    #         self.robber = robber
+
+    # class MockVertex:
+    #     def __init__(self, index, port_type=False):
+    #         self.vertexIndex = index
+    #         self.port = port_type
+    #         self.pixelCoords = f"pixel_{index}" # Mock pixel coords
+
+    # class MockBoard:
+    #     def __init__(self):
+    #         self.hexTileDict = {
+    #             0: MockHexTile(0, 'WOOD', 5),
+    #             1: MockHexTile(1, 'BRICK', 9),
+    #             2: MockHexTiled(2, 'DESERT', 0, True) # Robber on desert
+    #         }
+    #         # Simplified: map vertex index directly to Vertex obj for port testing
+    #         self.vertex_index_to_pixel_dict = {i: f"pixel_{i}" for i in range(54)}
+    #         self.boardGraph = {
+    #             f"pixel_0": MockVertex(0, port_type='2:1 WOOD'),
+    #             f"pixel_1": MockVertex(1, port_type='2:1 WOOD'),
+    #             f"pixel_2": MockVertex(2, port_type='3:1 PORT'),
+    #             f"pixel_3": MockVertex(3, port_type='3:1 PORT'),
+    #             f"pixel_4": MockVertex(4)
+    #         }
 
 
+    # class MockCatanGame:
+    #     def __init__(self):
+    #         self.board = MockBoard()
+    #         self.player_p1 = MockPlayer("Alice", "Red", 2, True)
+    #         self.player_p2 = MockPlayer("Bob", "Blue", 1)
+    #         self.playerQueue = type('obj', (object,), {'queue': [self.player_p1, self.player_p2]})() # Mock queue
+    #         self.gameSetup = True
 
-a = modelState()
+
+    # mock_game = MockCatanGame()
+    # current_player_mock = mock_game.player_p1
+
+    # state = modelState(mock_game, current_player_mock)
+    # print(state.to_json())
+    pass
