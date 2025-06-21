@@ -143,7 +143,6 @@ Ensure your entire response is a single valid JSON object.
                             llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "end_turn"}})
 
             elif self.llm_type == 'chatgpt': # Fallback to other LLM placeholders
-            elif self.llm_type == 'chatgpt':
                 self.thoughts = "ChatGPT placeholder: Thinking about building a road 0-1."
                 llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}})
             # ... (other placeholders for claude, deepseek) ...
