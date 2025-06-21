@@ -141,7 +141,16 @@ Ensure your entire response is a single valid JSON object.
                                                     "v2_index": {"type": "integer"},
                                                     "hex_index": {"type": "integer"},
                                                     "player_to_rob_name": {"type": "string"},
-                                                    "resources": {"type": "object"} # Assuming resources is a dictionary
+                                                    "resources": {
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "WOOD": {"type": "integer"},
+                                                            "BRICK": {"type": "integer"},
+                                                            "SHEEP": {"type": "integer"},
+                                                            "WHEAT": {"type": "integer"},
+                                                            "ORE": {"type": "integer"}
+                                                        }
+                                                    } # Assuming resources is a dictionary with known resource types
                                                 },
                                                 "required": ["type"]
                                             }
