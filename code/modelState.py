@@ -1,4 +1,6 @@
 import json
+import numpy as np # Added import
+
 # from board import catanBoard # Assuming catanBoard is in board.py
 # from player import player # Assuming player is in player.py
 
@@ -49,7 +51,7 @@ class modelState():
                 else:
                     port_info["vertex_indices"].append(pixel_to_vertex_index_map.get(vertex_pixel))
                     ports.append(port_info)
-        
+
         # Sort vertex_indices in each port for consistent output
         for port_entry in ports:
             port_entry["vertex_indices"].sort()
@@ -95,8 +97,33 @@ class modelState():
             })
         return sorted(player_states, key=lambda ps: ps["name"]) # Sort for consistency
 
+    def _json_serializer(self, obj):
+        if isinstance(obj, (np.integer, np.int_)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float_)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, np.bool_): # Handle numpy bool_ type
+            return bool(obj)
+        # Check for Point type if it's a common issue and not serializable by default.
+        # Assuming Point is from hexLib and might not have __dict__ or be directly serializable.
+        # This part is speculative, adjust if Point is already handled or has __dict__.
+        # elif isinstance(obj, hexLib.Point): # Requires 'import hexLib'
+        #     return {"x": obj.x, "y": obj.y} # Example for Point if it's a simple class
+        elif hasattr(obj, '__dict__'):
+            return obj.__dict__
+        else:
+            # Fallback for objects that are not directly serializable and don't have __dict__
+            # For example, simple custom objects or specific library objects.
+            # Converting to string is a generic fallback but might not be ideal for all structures.
+            try:
+                return str(obj)
+            except Exception:
+                raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable and has no __dict__ or str representation.")
+
     def to_json(self):
-        return json.dumps(self, default=lambda o: o.__dict__, indent=4, sort_keys=True)
+        return json.dumps(self, default=self._json_serializer, indent=4, sort_keys=True)
 
 if __name__ == '__main__':
     # This section is for example and testing; it would require mock objects
