@@ -127,7 +127,7 @@ Ensure your entire response is a single valid JSON object.
                             response = self.gemini_client.models.generate_content(
                                 model=f"models/{current_gemini_model_name}", # Model name might need "models/" prefix
                                 contents=[prompt], # Contents should be a list
-                                generation_config={
+                                config={
                                     "response_mime_type": "application/json",
                                     "response_schema": {
                                         "type": "object",
