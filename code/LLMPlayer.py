@@ -2,7 +2,9 @@ import os
 import json
 import re # For stripping markdown
 from player import player
-import google.generativeai as genai
+from google import genai
+
+
 
 class LLMPlayer(player):
     def __init__(self, playerName, playerColor, llm_type):
@@ -120,7 +122,7 @@ Ensure your entire response is a single valid JSON object.
                             # For safety, stick to 'gemini-pro' if 'gemini-2.5-flash' is not a generally available model name.
                             # The google-generativeai library typically uses 'gemini-pro' or 'gemini-1.0-pro' or 'gemini-1.5-pro-latest'.
                             # Let's use 'gemini-pro' as a default.
-                            current_gemini_model_name = "gemini-pro"
+                            current_gemini_model_name = "gemini-2.5-flash-lite-preview-06-17"
                             # print(f"GEMINI PROMPT for {self.name} (model: {current_gemini_model_name}):\n{prompt}") # For debugging
                             response = self.gemini_client.models.generate_content(
                                 model=f"models/{current_gemini_model_name}", # Model name might need "models/" prefix
