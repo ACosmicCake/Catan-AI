@@ -5,21 +5,36 @@ import numpy as np # Added import
 # from player import player # Assuming player is in player.py
 
 class modelState():
-    def __init__(self, catan_game, current_player):
+    def __init__(self, catan_game, current_player,
+                 robber_movement_is_mandatory=False,
+                 discard_is_mandatory=False,
+                 num_cards_to_discard=0):
         self.board = self.get_board_state(catan_game.board)
         self.players = self.get_players_state(catan_game.playerQueue.queue, current_player, catan_game.board)
         self.current_player_name = current_player.name
-        # Determine game phase based on a typical Catan rule:
-        # Setup phase is usually when players have less than 2 settlements.
-        # This might need adjustment based on actual game logic in catanGame.py
+
+        # Game phase (setup or main)
         is_setup_phase = True
         if hasattr(current_player, 'buildGraph') and len(current_player.buildGraph.get('SETTLEMENTS', [])) >= 2:
-            # A more robust check might involve looking at all players or a game phase variable in catan_game
             is_setup_phase = False
             if hasattr(catan_game, 'gameSetup'): # Prefer explicit game state if available
                  is_setup_phase = catan_game.gameSetup
-
         self.game_phase = "setup" if is_setup_phase else "main"
+
+        # Flags for special actions required by the current_player
+        self.robber_movement_is_mandatory = robber_movement_is_mandatory
+        self.discard_is_mandatory = discard_is_mandatory
+        self.num_cards_to_discard = num_cards_to_discard if discard_is_mandatory else 0
+
+        # Add current player's total resource count if they need to discard
+        # This helps the LLM verify its discard if this info is passed for the discarding player.
+        # Note: This info is for the 'current_player' for whom this modelState is generated.
+        # If this modelState is generated for a player *about to discard*, this is relevant.
+        if discard_is_mandatory:
+            self.current_player_total_resources = sum(current_player.resources.values())
+        else:
+            self.current_player_total_resources = 0
+
 
     def get_board_state(self, board_obj):
         hexes = []

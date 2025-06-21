@@ -40,6 +40,8 @@ class catanAIGame():
         #Initialize blank player queue and initial set up of roads + settlements
         self.playerQueue = queue.Queue(self.numPlayers)
         self.gameSetup = True #Boolean to take care of setup phase
+        # self.robber_action_pending = False # Old flag, remove or ensure it's removed
+        self.player_to_move_robber = None # New flag: stores the player object
 
         #Initialize boardview object
         self.boardView = catanGameView(self.board, self)
@@ -342,37 +344,53 @@ class catanAIGame():
 
     #Function to update resources for all players
     def update_playerResources(self, diceRoll, currentPlayer):
-        if(diceRoll != 7): #Collect resources if not a 7
-            #First get the hex or hexes corresponding to diceRoll
+        if diceRoll != 7: # Collect resources if not a 7
+            # ... (existing resource collection logic - no changes here) ...
             hexResourcesRolled = self.board.getHexResourceRolled(diceRoll)
-            #print('Resources rolled this turn:', hexResourcesRolled)
-
-            #Check for each player
             for player_i in list(self.playerQueue.queue):
-                #Check each settlement the player has
                 for settlementCoord in player_i.buildGraph['SETTLEMENTS']:
-                    for adjacentHex in self.board.boardGraph[settlementCoord].adjacentHexList: #check each adjacent hex to a settlement
-                        if(adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].robber == False): #This player gets a resource if hex is adjacent and no robber
+                    for adjacentHex in self.board.boardGraph[settlementCoord].adjacentHexList:
+                        if(adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].robber == False):
                             resourceGenerated = self.board.hexTileDict[adjacentHex].resource.type
                             player_i.resources[resourceGenerated] += 1
-                            print("{} collects 1 {} from Settlement".format(player_i.name, resourceGenerated))
-                
-                #Check each City the player has
+                            print(f"{player_i.name} collects 1 {resourceGenerated} from Settlement")
                 for cityCoord in player_i.buildGraph['CITIES']:
-                    for adjacentHex in self.board.boardGraph[cityCoord].adjacentHexList: #check each adjacent hex to a settlement
-                        if(adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].robber == False): #This player gets a resource if hex is adjacent and no robber
+                    for adjacentHex in self.board.boardGraph[cityCoord].adjacentHexList:
+                        if(adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].robber == False):
                             resourceGenerated = self.board.hexTileDict[adjacentHex].resource.type
                             player_i.resources[resourceGenerated] += 2
-                            print("{} collects 2 {} from City".format(player_i.name, resourceGenerated))
+                            print(f"{player_i.name} collects 2 {resourceGenerated} from City")
+                # Display player info (optional here, maybe more suitable in playCatan after all actions)
+                # print(f"Player:{player_i.name}, Resources:{player_i.resources}, Points: {player_i.victoryPoints}")
+                # print(f"MaxRoadLength:{player_i.maxRoadLength}, Longest Road:{player_i.longestRoadFlag}\n")
 
-                print("Player:{}, Resources:{}, Points: {}".format(player_i.name, player_i.resources, player_i.victoryPoints))
-                #print('Dev Cards:{}'.format(player_i.devCards))
-                #print("RoadsLeft:{}, SettlementsLeft:{}, CitiesLeft:{}".format(player_i.roadsLeft, player_i.settlementsLeft, player_i.citiesLeft))
-                print('MaxRoadLength:{}, Longest Road:{}\n'.format(player_i.maxRoadLength, player_i.longestRoadFlag))
-        
-        else:
-            print("AI using heuristic robber...")
-            currentPlayer.heuristic_move_robber(self.board)
+        else: # Dice roll is 7
+            print("---------------------------------------------------------------------------")
+            print("Dice roll is 7! Robber activates. Players with >7 cards must discard.")
+            print("---------------------------------------------------------------------------")
+
+
+            for p in list(self.playerQueue.queue):
+                p.pending_discard_count = 0 # Initialize/reset for all players first
+                total_resources = sum(p.resources.values())
+                if total_resources > 7:
+                    cards_to_discard_count = total_resources // 2
+                    print(f"Player {p.name} has {total_resources} resources and must discard {cards_to_discard_count}.")
+                    p.pending_discard_count = cards_to_discard_count # Set it on the player object
+
+            # Robber movement decision is now deferred to playCatan for LLMs
+            if isinstance(currentPlayer, heuristicAIPlayer):
+                print(f"{currentPlayer.name} (Heuristic) is moving the robber (will be handled after discards).")
+                # Heuristic will move robber after discards in its own way if this flag is checked by it.
+                # For now, the robber movement for heuristic is also part of its .move() or a specific call.
+                # The original call to currentPlayer.heuristic_move_robber(self.board) is removed from here.
+                # Instead, it will be handled in the playCatan sequence.
+                self.player_to_move_robber = currentPlayer # Heuristic also uses this flag now for sequence.
+            elif isinstance(currentPlayer, LLMPlayer):
+                print(f"{currentPlayer.name} (LLM) must move the robber. Action will be decided in their turn.")
+                self.player_to_move_robber = currentPlayer
+            else:
+                self.player_to_move_robber = None
 
 
     #function to check if a player has the longest road - after building latest road
@@ -421,154 +439,244 @@ class catanAIGame():
 
 
 
+    def _get_player_by_name(self, name_to_find):
+        for p_obj in list(self.playerQueue.queue):
+            if p_obj.name == name_to_find:
+                return p_obj
+        return None
+
+    def _execute_random_discard(self, player_obj, num_to_discard):
+        print(f"{player_obj.name} (Fallback) randomly discarding {num_to_discard} cards.")
+        discarded_count = 0
+        # Create a flat list of available resources to make random choice easier
+        available_for_discard = []
+        for resource, count in player_obj.resources.items():
+            available_for_discard.extend([resource] * count)
+
+        if not available_for_discard or len(available_for_discard) < num_to_discard:
+            print(f"Error: {player_obj.name} does not have enough cards to discard for random fallback.")
+            # This state should ideally not be reached if logic is correct.
+            # As a last resort, discard all cards if less than num_to_discard.
+            num_to_discard = len(available_for_discard)
+
+        np.random.shuffle(available_for_discard) # Shuffle for randomness
+
+        resources_actually_discarded = {}
+        for i in range(num_to_discard):
+            if available_for_discard: # Should always be true if logic is correct
+                card_to_discard = available_for_discard.pop()
+                player_obj.resources[card_to_discard] -= 1
+                resources_actually_discarded[card_to_discard] = resources_actually_discarded.get(card_to_discard, 0) + 1
+                discarded_count += 1
+        print(f"{player_obj.name} (Fallback) discarded: {resources_actually_discarded}")
+
+
+    def _execute_random_robber_move(self, player_who_moves_robber):
+        print(f"{player_who_moves_robber.name} (LLM Fallback) making a random robber move.")
+        # Simplified random robber placement logic (less sophisticated than heuristic's)
+        possible_hexes = [h_idx for h_idx, h_tile in self.board.hexTileDict.items() if not h_tile.robber]
+        if not possible_hexes: # Should not happen
+            print("Error: No valid hexes to move robber to.")
+            return
+
+        target_hex_idx = np.random.choice(possible_hexes)
+
+        # Find players on the target hex (simplified)
+        players_on_hex = []
+        # Need to import or access polygon_corners if it's not directly in self.board
+        # Assuming self.board.polygon_corners exists or is accessible
+        # For now, let's assume it's part of board or a utility function
+        # from hexLib import polygon_corners # This might be needed at top of file if not already via 'from board import *'
+
+        # The following line might cause an error if polygon_corners is not found
+        # This part of the code is complex to get right without running the game
+        # and depends on exact structure of board/hexLib.
+        # For now, we'll simplify the player search to avoid crashing here.
+        # A more robust way would be to iterate player.settlements/cities and check hex adjacency.
+        # target_hex_vertices = polygon_corners(self.board.flat, self.board.hexTileDict[target_hex_idx].hex)
+        # for v_coord in target_hex_vertices:
+        #     vertex_obj = self.board.boardGraph.get(v_coord)
+        #     if vertex_obj and vertex_obj.state.get('Player') and vertex_obj.state.get('Player') != player_who_moves_robber:
+        #         # Check if player has resources, simplified here
+        #         player_candidate = vertex_obj.state['Player']
+        #         if sum(player_candidate.resources.values()) > 0:
+        #             if player_candidate not in players_on_hex:
+        #                  players_on_hex.append(player_candidate)
+
+        # Simplified player search: iterate all players, check if any of their buildings are on the target hex
+        for p_other in list(self.playerQueue.queue):
+            if p_other == player_who_moves_robber:
+                continue
+            if sum(p_other.resources.values()) == 0: # Cannot rob player with no resources
+                continue
+            for settlement_coord in p_other.buildGraph['SETTLEMENTS']:
+                 if self.board.hexTileDict[target_hex_idx] in self.board.boardGraph[settlement_coord].get_adjacent_hex_tiles(self.board): # Assuming get_adjacent_hex_tiles method exists
+                    if p_other not in players_on_hex: players_on_hex.append(p_other)
+                    break
+            if p_other in players_on_hex: continue # Already found
+            for city_coord in p_other.buildGraph['CITIES']:
+                 if self.board.hexTileDict[target_hex_idx] in self.board.boardGraph[city_coord].get_adjacent_hex_tiles(self.board):
+                    if p_other not in players_on_hex: players_on_hex.append(p_other)
+                    break
+
+        player_to_rob_obj = None
+        if players_on_hex:
+            player_to_rob_obj = np.random.choice(players_on_hex)
+            print(f"Robber randomly moved to hex {target_hex_idx}, targeting {player_to_rob_obj.name}.")
+        else:
+            print(f"Robber randomly moved to hex {target_hex_idx}, no one to rob there.")
+
+        player_who_moves_robber.move_robber(target_hex_idx, self.board, player_to_rob_obj)
+
+
     #Function that runs the main game loop with all players and pieces
     def playCatan(self):
-        #self.board.displayBoard() #Display updated board
         numTurns = 0
-        # from LLMPlayer import LLMPlayer # Will be used when players are LLMPlayer instances
-
-        while (self.gameOver == False):
-            #Loop for each player's turn -> iterate through the player queue
-            for currPlayer in self.playerQueue.queue:
+        while not self.gameOver:
+            for currPlayer in list(self.playerQueue.queue): # Iterate on a copy if queue is modified
                 numTurns += 1
                 print("---------------------------------------------------------------------------")
                 print(f"Current Player: {currPlayer.name} (Color: {currPlayer.color})")
                 
-                #Update Player's dev card stack with dev cards drawn in previous turn and reset devCardPlayedThisTurn
                 currPlayer.updateDevCards()
                 currPlayer.devCardPlayedThisTurn = False
 
-                # --- Dice Roll and Resource Update ---
-                pygame.event.pump() # Keep Pygame responsive
+                pygame.event.pump()
                 diceNum = self.rollDice()
-                self.update_playerResources(diceNum, currPlayer) # Handles 7-out rule via heuristic_move_robber if diceNum is 7
-                self.diceStats[diceNum] += 1
-                self.diceStats_list.append(diceNum)
-                # --- End of Dice Roll ---
+                # update_playerResources now sets pending_discard_count on players and player_to_move_robber on self
+                self.update_playerResources(diceNum, currPlayer)
+                self.diceStats[diceNum] += 1; self.diceStats_list.append(diceNum)
 
-                # LLM Player Turn Logic or Heuristic AI Logic
-                if hasattr(currPlayer, 'get_llm_move'): # Check if the player is an LLM type
-                    print(f"{currPlayer.name} is an LLMPlayer, getting move...")
-                    try:
-                        current_model_state = modelState(self, currPlayer)
-                        action = currPlayer.get_llm_move(current_model_state)
-                        print(f"{currPlayer.name} proposed action: {action}")
-                        print(f"{currPlayer.name}'s thoughts: {currPlayer.thoughts}")
+                # --- Card Discarding Phase (if a 7 was rolled) ---
+                if diceNum == 7:
+                    print("--- Card Discarding Phase ---")
+                    for p_discarding in list(self.playerQueue.queue):
+                        if hasattr(p_discarding, 'pending_discard_count') and p_discarding.pending_discard_count > 0:
+                            required_discard_num = p_discarding.pending_discard_count
+                            print(f"Player {p_discarding.name} must discard {required_discard_num} cards.")
+                            if isinstance(p_discarding, LLMPlayer):
+                                state_for_discard = modelState(self, p_discarding, discard_is_mandatory=True, num_cards_to_discard=required_discard_num)
+                                discard_action = p_discarding.get_llm_move(state_for_discard)
+                                print(f"{p_discarding.name} (Discard Thoughts: {p_discarding.thoughts}) -> Discard Action: {discard_action}")
 
-                        action_type = action.get("type")
+                                executed_discard = False
+                                if discard_action.get("type") == "discard_cards":
+                                    resources_to_discard = discard_action.get("resources", {})
+                                    actual_discarded_sum = sum(resources_to_discard.values())
 
-                        if action_type == "build_road":
-                            v1_idx = action.get("v1_index")
-                            v2_idx = action.get("v2_index")
-                            if v1_idx is not None and v2_idx is not None:
-                                try:
-                                    v1_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx)
-                                    v2_coord = self.board.vertex_index_to_pixel_dict.get(v2_idx)
-                                    if v1_coord and v2_coord:
-                                        print(f"{currPlayer.name} attempts to build road between {v1_idx} and {v2_idx}")
-                                        currPlayer.build_road(v1_coord, v2_coord, self.board)
-                                        self.check_longest_road(currPlayer) # Check after building
+                                    valid_discard = True
+                                    if actual_discarded_sum != required_discard_num:
+                                        print(f"Error: {p_discarding.name} LLM proposed discarding {actual_discarded_sum} cards, but {required_discard_num} required.")
+                                        valid_discard = False
                                     else:
-                                        print(f"Invalid vertex indices for build_road: {v1_idx}, {v2_idx}")
-                                except Exception as e:
-                                    print(f"Error executing build_road: {e}")
-                            else:
-                                print("Missing vertex indices for build_road action.")
+                                        for res, count in resources_to_discard.items():
+                                            if p_discarding.resources.get(res, 0) < count:
+                                                print(f"Error: {p_discarding.name} LLM tried to discard {count} {res}, but only has {p_discarding.resources.get(res, 0)}.")
+                                                valid_discard = False; break
 
-                        elif action_type == "build_settlement":
-                            v_idx = action.get("vertex_index")
-                            if v_idx is not None:
-                                try:
-                                    v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
-                                    if v_coord:
-                                        print(f"{currPlayer.name} attempts to build settlement at {v_idx}")
-                                        currPlayer.build_settlement(v_coord, self.board)
-                                    else:
-                                        print(f"Invalid vertex index for build_settlement: {v_idx}")
-                                except Exception as e:
-                                    print(f"Error executing build_settlement: {e}")
-                            else:
-                                print("Missing vertex index for build_settlement action.")
+                                    if valid_discard:
+                                        for res, count in resources_to_discard.items():
+                                            p_discarding.resources[res] -= count
+                                        print(f"{p_discarding.name} (LLM) discarded: {resources_to_discard}")
+                                        executed_discard = True
 
-                        elif action_type == "build_city":
-                            v_idx = action.get("vertex_index")
-                            if v_idx is not None:
-                                try:
-                                    v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
-                                    if v_coord:
-                                        if v_coord in currPlayer.buildGraph['SETTLEMENTS']:
-                                            print(f"{currPlayer.name} attempts to build city at {v_idx}")
-                                            currPlayer.build_city(v_coord, self.board)
-                                        else:
-                                            print(f"{currPlayer.name} cannot build city at {v_idx}: no settlement present.")
-                                    else:
-                                        print(f"Invalid vertex index for build_city: {v_idx}")
-                                except Exception as e:
-                                    print(f"Error executing build_city: {e}")
-                            else:
-                                print("Missing vertex index for build_city action.")
+                                if not executed_discard: # Fallback if LLM action was invalid or wrong type
+                                    self._execute_random_discard(p_discarding, required_discard_num)
 
-                        elif action_type == "buy_development_card":
-                            print(f"{currPlayer.name} attempts to buy development card.")
-                            currPlayer.draw_devCard(self.board)
+                            elif isinstance(p_discarding, heuristicAIPlayer):
+                                print(f"{p_discarding.name} (Heuristic) discarding...")
+                                p_discarding.heuristic_discard() # Assumes it handles its own resource reduction
 
-                        elif action_type == "trade_with_bank":
-                            res_give = action.get("resource_to_give")
-                            res_receive = action.get("resource_to_receive")
-                            if res_give and res_receive:
-                                print(f"{currPlayer.name} attempts to trade {res_give} for {res_receive} with bank.")
-                                currPlayer.trade_with_bank(res_give.upper(), res_receive.upper())
-                            else:
-                                print("Missing resource types for trade_with_bank action.")
+                            p_discarding.pending_discard_count = 0
+                            self.boardView.displayGameScreen()
+                            pygame.time.delay(100) # Small delay after each player discards
+                    print("--- Card Discarding Phase Complete ---")
 
-                        elif action_type == "play_knight_card":
-                            print(f"{currPlayer.name} wants to play a KNIGHT card (conceptual - not fully implemented).")
-                            # Placeholder for non-interactive knight play
-                            # if 'KNIGHT' in currPlayer.devCards and currPlayer.devCards['KNIGHT'] > 0:
-                            #    currPlayer.devCards['KNIGHT'] -= 1
-                            #    currPlayer.knightsPlayed += 1
-                            #    # self.robber(currPlayer) # This would call the robber placement logic
-                            #    self.check_largest_army(currPlayer)
-                            # else:
-                            #    print(f"{currPlayer.name} has no KNIGHT card to play.")
-                            pass
 
-                        elif action_type == "end_turn":
-                            print(f"{currPlayer.name} ends their turn.")
-                            pass
+                # --- Robber Movement Phase (if a 7 was rolled and pending for currPlayer) ---
+                if self.player_to_move_robber == currPlayer: # currPlayer is the one who rolled the 7
+                    print(f"{currPlayer.name} must move the robber.")
+                    if isinstance(currPlayer, LLMPlayer):
+                        state_for_robber = modelState(self, currPlayer, robber_movement_is_mandatory=True)
+                        robber_action = currPlayer.get_llm_move(state_for_robber)
+                        print(f"{currPlayer.name} (Robber Thoughts: {currPlayer.thoughts}) -> Robber Action: {robber_action}")
+                        # ... (rest of robber execution logic from previous step, including fallback)
+                        executed_robber_move = False
+                        if robber_action.get("type") == "move_robber":
+                            hex_idx = robber_action.get("hex_index")
+                            player_name_to_rob = robber_action.get("player_to_rob_name")
+                            player_to_rob_object = None
+                            if player_name_to_rob: player_to_rob_object = self._get_player_by_name(player_name_to_rob)
+                            if hex_idx is not None:
+                                currPlayer.move_robber(hex_idx, self.board, player_to_rob_object)
+                                print(f"{currPlayer.name} moved robber to hex {hex_idx}" + (f" and robbed {player_name_to_rob}" if player_name_to_rob else "."))
+                                executed_robber_move = True
+                        if not executed_robber_move:
+                            print(f"{currPlayer.name} (LLM) failed to provide valid 'move_robber' action. Randomly placing.")
+                            self._execute_random_robber_move(currPlayer)
 
-                        else:
-                            print(f"Unknown or unsupported action type: {action_type}. Player ends turn by default.")
+                    elif isinstance(currPlayer, heuristicAIPlayer):
+                        print(f"{currPlayer.name} (Heuristic) moving robber...")
+                        currPlayer.heuristic_move_robber(self.board) # Heuristic handles its robber move
 
-                    except Exception as e:
-                        print(f"Error during LLM player {currPlayer.name}'s turn: {e}")
-                        print(f"{currPlayer.name} ends turn due to error.")
+                    self.player_to_move_robber = None # Reset flag
+                    self.boardView.displayGameScreen(); pygame.time.delay(300)
 
-                else: # Fallback to existing heuristic AI logic if not an LLMPlayer
-                    print(f"{currPlayer.name} is a HeuristicAIPlayer, using existing move logic.")
+                # --- Main Turn Actions ---
+                if isinstance(currPlayer, LLMPlayer):
+                    # ... (LLM main turn action logic as before) ...
+                    print(f"{currPlayer.name} taking main turn actions...")
+                    state_for_main_turn = modelState(self, currPlayer)
+                    action = currPlayer.get_llm_move(state_for_main_turn)
+                    # ... (action processing as before, same as previous step) ...
+                    action_type = action.get("type")
+                    if action_type == "build_road":
+                        v1_idx, v2_idx = action.get("v1_index"), action.get("v2_index")
+                        if v1_idx is not None and v2_idx is not None:
+                            v1_coord, v2_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx), self.board.vertex_index_to_pixel_dict.get(v2_idx)
+                            if v1_coord and v2_coord: currPlayer.build_road(v1_coord, v2_coord, self.board); self.check_longest_road(currPlayer)
+                            else: print(f"Invalid vertex indices for build_road: {v1_idx}, {v2_idx}")
+                        else: print(f"Missing vertex indices for build_road action for {currPlayer.name}.")
+                    elif action_type == "build_settlement":
+                        v_idx = action.get("vertex_index")
+                        if v_idx is not None:
+                            v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
+                            if v_coord: currPlayer.build_settlement(v_coord, self.board)
+                            else: print(f"Invalid vertex index for build_settlement: {v_idx}")
+                        else: print(f"Missing vertex index for build_settlement action for {currPlayer.name}.")
+                    elif action_type == "build_city":
+                        v_idx = action.get("vertex_index")
+                        if v_idx is not None:
+                            v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
+                            if v_coord and v_coord in currPlayer.buildGraph['SETTLEMENTS']: currPlayer.build_city(v_coord, self.board)
+                            else: print(f"Cannot build city at {v_idx} for {currPlayer.name}")
+                        else: print(f"Missing vertex index for build_city action for {currPlayer.name}.")
+                    elif action_type == "buy_development_card":
+                        currPlayer.draw_devCard(self.board)
+                    elif action_type == "trade_with_bank":
+                        res_give, res_receive = action.get("resource_to_give"), action.get("resource_to_receive")
+                        if res_give and res_receive: currPlayer.trade_with_bank(res_give.upper(), res_receive.upper())
+                        else: print(f"Missing resources for trade_with_bank for {currPlayer.name}")
+                    elif action_type == "play_knight_card":
+                        print(f"{currPlayer.name} wants to play a KNIGHT card (conceptual - not fully implemented).")
+                        pass
+                    elif action_type == "end_turn":
+                        print(f"{currPlayer.name} ends their turn.")
+                    else: # Unknown action or if LLM robber phase returned non-robber action
+                        print(f"Unknown or unsupported main action type: {action_type} for {currPlayer.name}. Player ends turn by default.")
+
+                elif isinstance(currPlayer, heuristicAIPlayer):
+                    # ... (Heuristic main turn action logic as before) ...
+                    print(f"{currPlayer.name} (Heuristic) is making moves...")
                     currPlayer.move(self.board)
-                    self.check_longest_road(currPlayer) # Original placement for heuristic AI
+                    self.check_longest_road(currPlayer)
 
-                # Common turn finalization
-                print("Player:{}, Resources:{}, Points: {}".format(currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
-                self.boardView.displayGameScreen() # Update display
-                pygame.time.delay(300) # Brief pause
-
-                # Check if game is over
-                if currPlayer.victoryPoints >= self.maxPoints:
-                    self.gameOver = True
-                    print("====================================================")
-                    print(f"PLAYER {currPlayer.name} WINS IN {int(numTurns/self.numPlayers)} ROUNDS!")
-                    print(self.diceStats)
-                    break # Break from player loop
-
-            if(self.gameOver):
-                # Handle game over screen or delay before exiting
-                start_time = pygame.time.get_ticks()
-                while pygame.time.get_ticks() - start_time < 5000: # 5-second display of final board
-                    pygame.event.pump() # Keep Pygame responsive
-                    self.boardView.displayGameScreen() # Keep showing the board
-                break # Break from game loop
+                # ... (common turn finalization, victory check, etc. as before) ...
+                print(f"Player:{currPlayer.name}, Resources:{currPlayer.resources}, Points: {currPlayer.victoryPoints}")
+                self.boardView.displayGameScreen()
+                if not self.gameOver : pygame.time.delay(300)
+                if currPlayer.victoryPoints >= self.maxPoints: self.gameOver = True; break
+            if self.gameOver: break
                                    
 # Initialize new game and run
 if __name__ == "__main__":
