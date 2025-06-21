@@ -4,6 +4,7 @@
 import pygame
 from hexTile import *
 from hexLib import *
+from LLMPlayer import LLMPlayer # Add this import
 
 pygame.init()
 
@@ -183,8 +184,17 @@ class catanGameView():
         self.displayGameButtons()
         self.displayRobber()
 
-        #Loop through and display all existing buildings from players build graphs
-        for player_i in list(self.game.playerQueue.queue): #Build Settlements and roads of each player
+        # Define text color and starting position for thoughts
+        thoughts_text_color = (230, 230, 230) # Light gray / off-white for visibility on blue
+        base_x_thoughts = 780 # X position for thoughts display (right side of screen)
+        base_y_thoughts = 60  # Starting Y position for the first player's thoughts
+        line_height = 18      # Height for each line of text (font_button size is 12)
+        player_thought_y_offset = 0 # Y offset for current player's thoughts block
+
+        # Loop through and display all existing buildings from players build graphs
+        # Also display LLM thoughts here
+        for i, player_i in enumerate(list(self.game.playerQueue.queue)):
+            # Display buildings
             for existingRoad in player_i.buildGraph['ROADS']:
                 self.draw_road(existingRoad, player_i.color)
             

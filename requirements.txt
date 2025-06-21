@@ -1,0 +1,10 @@
+pygame
+numpy
+openai
+google-generativeai
+anthropic
+deepseek
+python-dotenv
+matplotlib
+genai
+google
