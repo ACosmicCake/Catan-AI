@@ -12,6 +12,9 @@ import numpy as np
 import sys, pygame
 import matplotlib.pyplot as plt
 
+from dotenv import load_dotenv
+load_dotenv() # Load environment variables from .env file
+
 #Class to implement an only AI
 class catanAIGame():
     #Create new gameboard
