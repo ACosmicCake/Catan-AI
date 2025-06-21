@@ -570,5 +570,6 @@ class catanAIGame():
                     self.boardView.displayGameScreen() # Keep showing the board
                 break # Break from game loop
                                    
-# Initialize new game and run - this line should be outside the class
-# newGame_AI = catanAIGame()
+# Initialize new game and run
+if __name__ == "__main__":
+    newGame_AI = catanAIGame()
