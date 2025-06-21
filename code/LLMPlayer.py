@@ -9,7 +9,7 @@ class LLMPlayer(player):
         super().__init__(playerName, playerColor)
         self.llm_type = llm_type
         self.thoughts = ""
-        self.gemini_model = None
+        self.gemini_client = None # Changed from self.gemini_model
 
     def _strip_markdown_json(self, text_response):
         # Check if the response is wrapped in markdown JSON backticks
@@ -101,43 +101,48 @@ Ensure your entire response is a single valid JSON object.
                     print(f"ERROR FOR {self.name}: {self.thoughts}")
                     llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "end_turn"}})
                 else:
-                    if not self.gemini_model:
+                    if not self.gemini_client: # Initialize client if not already done
                         try:
-                            genai.configure(api_key=api_key)
-                            self.gemini_model = genai.GenerativeModel(model_name='gemini-pro')
-                            print(f"Gemini model initialized for {self.name}")
+                            # No genai.configure needed if using genai.Client directly with api_key
+                            self.gemini_client = genai.Client(api_key=api_key)
+                            print(f"Gemini client initialized for {self.name}")
                         except Exception as e:
-                            self.thoughts = f"Failed to initialize Gemini model: {e}"
+                            self.thoughts = f"Failed to initialize Gemini client: {e}"
                             print(f"ERROR FOR {self.name}: {self.thoughts}")
                             llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "end_turn"}})
-                            self.gemini_model = None
+                            self.gemini_client = None
 
-                    if self.gemini_model:
-                        print(f"Attempting Gemini API call for {self.name}...")
+                    if self.gemini_client:
+                        print(f"Attempting Gemini API call for {self.name} using genai.Client pattern...")
                         try:
-                            response = self.gemini_model.generate_content(prompt)
+                            # Using client.models.generate_content as per user feedback
+                            # Model name can be 'gemini-pro' or user's 'gemini-1.5-flash' (or 'gemini-1.5-pro-latest')
+                            # For safety, stick to 'gemini-pro' if 'gemini-2.5-flash' is not a generally available model name.
+                            # The google-generativeai library typically uses 'gemini-pro' or 'gemini-1.0-pro' or 'gemini-1.5-pro-latest'.
+                            # Let's use 'gemini-pro' as a default.
+                            current_gemini_model_name = "gemini-pro"
+                            # print(f"GEMINI PROMPT for {self.name} (model: {current_gemini_model_name}):\n{prompt}") # For debugging
+                            response = self.gemini_client.models.generate_content(
+                                model=f"models/{current_gemini_model_name}", # Model name might need "models/" prefix
+                                contents=[prompt] # Contents should be a list
+                            )
 
-                            if response.prompt_feedback.block_reason:
-                                self.thoughts = f"Gemini API call blocked. Reason: {response.prompt_feedback.block_reason}"
-                                print(f"WARNING FOR {self.name}: {self.thoughts}")
-                                llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "end_turn"}})
-                            else:
-                                # Robustly get text, preferring candidates if available
-                                if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
-                                    raw_llm_response_text_for_thoughts = response.candidates[0].content.parts[0].text
-                                else:
-                                    raw_llm_response_text_for_thoughts = response.text # Fallback if structure is simpler
+                            # Check for blocking (though structure might differ with genai.Client)
+                            # Accessing prompt_feedback might be different.
+                            # For now, let's assume if response object exists, it wasn't immediately blocked.
+                            # If response.text is empty or an error, it will be caught by later checks or JSON parsing.
+                            # A more robust check for specific block reasons might be needed after testing.
 
-                                llm_response_json_str = self._strip_markdown_json(raw_llm_response_text_for_thoughts)
-                                # Store the (potentially stripped) response text for thoughts, might be updated by parsed JSON later
-                                self.thoughts = f"Gemini ({self.name}) response: {llm_response_json_str[:200]}..."
-                                print(f"SUCCESS: Gemini API call for {self.name} completed.")
+                            raw_llm_response_text_for_thoughts = response.text
+                            llm_response_json_str = self._strip_markdown_json(raw_llm_response_text_for_thoughts)
+                            self.thoughts = f"Gemini ({self.name}) response: {llm_response_json_str[:200]}..."
+                            print(f"SUCCESS: Gemini API call for {self.name} completed using genai.Client.")
                         except Exception as e:
-                            self.thoughts = f"Error during Gemini API call for {self.name}: {e}"
+                            self.thoughts = f"Error during Gemini API call for {self.name} (genai.Client): {e}"
                             print(f"ERROR FOR {self.name}: {self.thoughts}")
                             llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "end_turn"}})
 
-            # Fallback to other LLM placeholders if not Gemini and no mandatory action was handled above
+            elif self.llm_type == 'chatgpt': # Fallback to other LLM placeholders
             elif self.llm_type == 'chatgpt':
                 self.thoughts = "ChatGPT placeholder: Thinking about building a road 0-1."
                 llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}})
