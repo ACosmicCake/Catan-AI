@@ -127,37 +127,6 @@ Ensure your entire response is a single valid JSON object.
                             response = self.gemini_client.models.generate_content(
                                 model=f"models/{current_gemini_model_name}", # Model name might need "models/" prefix
                                 contents=[prompt], # Contents should be a list
-                                config={
-                                    "response_mime_type": "application/json",
-                                    "response_schema": {
-                                        "type": "object",
-                                        "properties": {
-                                            "thoughts": {"type": "string"},
-                                            "action": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "type": {"type": "string"},
-                                                    "v1_index": {"type": "integer"},
-                                                    "v2_index": {"type": "integer"},
-                                                    "hex_index": {"type": "integer"},
-                                                    "player_to_rob_name": {"type": "string"},
-                                                    "resources": {
-                                                        "type": "object",
-                                                        "properties": {
-                                                            "WOOD": {"type": "integer"},
-                                                            "BRICK": {"type": "integer"},
-                                                            "SHEEP": {"type": "integer"},
-                                                            "WHEAT": {"type": "integer"},
-                                                            "ORE": {"type": "integer"}
-                                                        }
-                                                    } # Assuming resources is a dictionary with known resource types
-                                                },
-                                                "required": ["type"]
-                                            }
-                                        },
-                                        "required": ["thoughts", "action"]
-                                    }
-                                }
                             )
 
                             # Check for blocking (though structure might differ with genai.Client)
