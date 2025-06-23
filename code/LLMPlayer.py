@@ -22,17 +22,28 @@ class LLMPlayer(player):
     def _construct_prompt(self, game_state_obj):
         game_state_json = game_state_obj.to_json() # Serialize here for the prompt content
 
+        previous_action_feedback = ""
+        if hasattr(game_state_obj, 'last_action_status') and game_state_obj.last_action_status:
+            previous_action_feedback = f"Feedback on your last attempt: Status: {game_state_obj.last_action_status}."
+            if hasattr(game_state_obj, 'last_action_error_details') and game_state_obj.last_action_error_details:
+                previous_action_feedback += f" Details: {game_state_obj.last_action_error_details}."
+            previous_action_feedback += " Please try a different valid action or correct your previous one.\n"
+
         instructions = "Your turn to make a move. Analyze the game state and decide on the best action."
         possible_actions = "Your possible actions are: build_road, build_settlement, build_city, buy_development_card, trade_with_bank, end_turn."
+        # Note: play_dev_card, trade_player, discard_cards are also actions but might need more specific prompting.
+        # The available_actions in modelState should be the primary guide for the LLM.
+
         example_actions = [
             {"thoughts": "I should build a road to expand.", "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}},
             {"thoughts": "I want to build a settlement at vertex 5.", "action": {"type": "build_settlement", "vertex_index": 5}},
             {"thoughts": "I will end my turn.", "action": {"type": "end_turn"}}
         ]
 
+        # Specific instructions based on game state take precedence
         if hasattr(game_state_obj, 'robber_movement_is_mandatory') and game_state_obj.robber_movement_is_mandatory:
-            instructions = "A 7 was rolled and you must move the robber. This is your only action for this specific decision."
-            possible_actions = "Your ONLY action for this decision must be: move_robber."
+            instructions = "A 7 was rolled and you MUST move the robber. This is your only action for this specific decision."
+            possible_actions = "Your ONLY action for this decision must be: move_robber. Consult 'available_actions' in the game state for valid hex indices to move the robber to (generally any hex not currently occupied by the robber)."
             example_actions = [
                 {"thoughts": "I need to move the robber. I'll choose hex 10 and target Player X if available.", "action": {"type": "move_robber", "hex_index": 10, "player_to_rob_name": "PlayerX_Name_Or_Null"}}
             ]
@@ -79,8 +90,9 @@ class LLMPlayer(player):
 You are an expert Settlers of Catan player. Here is the current game state:
 {game_state_json}
 
-{instructions}
+{previous_action_feedback}{instructions}
 {possible_actions}
+Refer to the 'available_actions' section within the game state JSON to see currently valid locations for building roads, settlements, or cities.
 Provide your reasoning in a 'thoughts' field and the chosen action in an 'action' field in JSON format.
 {example_str}
 Ensure your entire response is a single valid JSON object.

@@ -10,7 +10,9 @@ class modelState():
                  discard_is_mandatory=False,
                  num_cards_to_discard=0,
                  setup_road_placement_pending=False, # New flag
-                 last_settlement_vertex_index=None): # New flag
+                 last_settlement_vertex_index=None, # New flag
+                 last_action_status: str = None, # New field for feedback
+                 last_action_error_details: str = None): # New field for feedback
         self.board = self.get_board_state(catan_game.board)
         self.players = self.get_players_state(catan_game.playerQueue.queue, current_player, catan_game.board)
         self.current_player_name = current_player.name
@@ -47,6 +49,14 @@ class modelState():
             self.current_player_total_resources = sum(current_player.resources.values())
         else:
             self.current_player_total_resources = 0
+
+        # Store feedback fields if provided
+        # These are dynamically set by catanGame.py before serializing for the LLM if a retry is needed.
+        if last_action_status:
+            self.last_action_status = last_action_status
+        if last_action_error_details:
+            self.last_action_error_details = last_action_error_details
+
 
     def get_available_actions(self, game, player_perspective, setup_road_pending, last_settlement_idx):
         """
