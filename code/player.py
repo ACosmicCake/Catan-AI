@@ -42,31 +42,47 @@ class player():
 
 
     #function to build a road from vertex v1 to vertex v2
-    def build_road(self, v1, v2, board):
+    def build_road(self, v1, v2, board, setup_phase=False): # Added setup_phase argument
         'Update buildGraph to add a road on edge v1 - v2'
 
-        if(self.resources['BRICK'] > 0 and self.resources['WOOD'] > 0): #Check if player has resources available
-            if(self.roadsLeft > 0): #Check if player has roads left
-                self.buildGraph['ROADS'].append((v1,v2))
-                self.roadsLeft -= 1
+        can_build = False
+        if setup_phase:
+            if self.roadsLeft > 0:
+                can_build = True
+            else:
+                print(f"{self.name} has no roads left to build during setup.") # Should not happen in normal setup
+        else: # Main game phase - check resources
+            if self.resources['BRICK'] > 0 and self.resources['WOOD'] > 0:
+                if self.roadsLeft > 0:
+                    can_build = True
+                else:
+                    print(f"{self.name} has no roads available to build.")
+            else:
+                print(f"{self.name} has insufficient Resources to Build Road - Need 1 BRICK, 1 WOOD.")
 
-                #Update player resources
+        if can_build:
+            self.buildGraph['ROADS'].append((v1,v2))
+            self.roadsLeft -= 1
+
+            if not setup_phase: # Deduct resources only if not in setup phase
                 self.resources['BRICK'] -= 1
                 self.resources['WOOD'] -= 1
 
-                board.updateBoardGraph_road(v1, v2, self) #update the overall boardGraph
+            board.updateBoardGraph_road(v1, v2, self) #update the overall boardGraph
 
-                #Calculate current max road length and update
-                maxRoads = self.get_road_length(board)
-                self.maxRoadLength = maxRoads
+            #Calculate current max road length and update
+            # Ensure get_road_length doesn't fail if buildGraph['ROADS'] is empty initially (though can_build should prevent this path)
+            if self.buildGraph['ROADS']:
+                 maxRoads = self.get_road_length(board)
+                 self.maxRoadLength = maxRoads
+            else: # Should ideally not be reached if road was just added.
+                 self.maxRoadLength = 0
 
-                print('{} Built a Road. MaxRoadLength: {}'.format(self.name, self.maxRoadLength))
 
-            else:
-                print("No roads available to build")
+            print('{} Built a Road. MaxRoadLength: {}'.format(self.name, self.maxRoadLength))
+            return True # Indicate success
 
-        else:
-            print("Insufficient Resources to Build Road - Need 1 BRICK, 1 WOOD")
+        return False # Indicate failure
 
 
     #function to build a settlement on vertex with coordinates vCoord
