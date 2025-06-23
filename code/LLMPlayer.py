@@ -43,6 +43,31 @@ class LLMPlayer(player):
             example_actions = [
                 {"thoughts": f"I must discard {num_to_discard} cards. I'll discard some wood and sheep.", "action": {"type": "discard_cards", "resources": {"WOOD": 1, "SHEEP": 1}}} # Example, actual counts must sum to num_to_discard
             ]
+        elif hasattr(game_state_obj, 'setup_road_placement_pending') and game_state_obj.setup_road_placement_pending and hasattr(game_state_obj, 'last_settlement_vertex_index'):
+            last_settlement_v_idx = game_state_obj.last_settlement_vertex_index
+            instructions = f"You have just placed a settlement at vertex {last_settlement_v_idx}. You MUST now build a road connected to this new settlement. This is your only action."
+            possible_actions = "Your ONLY action for this decision must be: build_road."
+            # Find a valid neighbor for the example. This is tricky without full board access here.
+            # We'll use a placeholder. The LLM should use available_road_locations from game_state.
+            example_v2_idx = "any_valid_neighbor_of_" + str(last_settlement_v_idx)
+            # Try to get a valid neighbor from available_road_locations if present in game_state_obj
+            if hasattr(game_state_obj, 'available_actions') and 'build_road' in game_state_obj.available_actions:
+                if game_state_obj.available_actions['build_road']: # Check if list is not empty
+                    # Assuming available_actions['build_road'] is a list of tuples like [(v1,v2), ...]
+                    # And we need to find one where v1 or v2 is last_settlement_v_idx
+                    for r_v1, r_v2 in game_state_obj.available_actions['build_road']:
+                        if r_v1 == last_settlement_v_idx:
+                            example_v2_idx = r_v2
+                            break
+                        elif r_v2 == last_settlement_v_idx:
+                            # Ensure the example uses last_settlement_v_idx as v1_index if it's not already
+                            # This is just for consistency in the example.
+                            example_v2_idx = r_v1 # The other end of the road
+                            break
+            example_actions = [
+                {"thoughts": f"I just built a settlement at vertex {last_settlement_v_idx}. Now I must build an adjacent road. I will connect it to vertex {example_v2_idx}.", "action": {"type": "build_road", "v1_index": last_settlement_v_idx, "v2_index": example_v2_idx}}
+            ]
+
 
         # Construct example string
         example_str = "For example: " + json.dumps(example_actions[0])
