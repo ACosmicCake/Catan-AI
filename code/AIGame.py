@@ -639,14 +639,16 @@ class catanAIGame():
             if sum(p_other.resources.values()) == 0: # Cannot rob player with no resources
                 continue
             for settlement_coord in p_other.buildGraph['SETTLEMENTS']:
-                 if self.board.hexTileDict[target_hex_idx] in self.board.boardGraph[settlement_coord].get_adjacent_hex_tiles(self.board): # Assuming get_adjacent_hex_tiles method exists
+                # A settlement_coord is a key to self.board.boardGraph, which gives a Vertex object
+                # The Vertex object has an adjacentHexList (list of hex indices)
+                if target_hex_idx in self.board.boardGraph[settlement_coord].adjacentHexList:
                     if p_other not in players_on_hex: players_on_hex.append(p_other)
-                    break
-            if p_other in players_on_hex: continue # Already found
+                    break # Found this player via one of their settlements, no need to check other settlements for same player
+            if p_other in players_on_hex: continue # Already found this player (e.g. via a settlement), skip checking their cities for list append
             for city_coord in p_other.buildGraph['CITIES']:
-                 if self.board.hexTileDict[target_hex_idx] in self.board.boardGraph[city_coord].get_adjacent_hex_tiles(self.board):
+                if target_hex_idx in self.board.boardGraph[city_coord].adjacentHexList:
                     if p_other not in players_on_hex: players_on_hex.append(p_other)
-                    break
+                    break # Found this player via one of their cities
 
         player_to_rob_obj = None
         if players_on_hex:
