@@ -123,7 +123,8 @@ You are an expert Settlers of Catan player. Here is the current game state:
 {previous_action_feedback}{instructions}
 {possible_actions}
 Refer to the 'available_actions' section within the game state JSON to see currently valid locations for building.
-The 'action_costs' section lists the resource costs for standard actions.
+The 'action_costs' section lists the resource costs for standard building actions.
+The 'current_player_bank_trade_ratios' section details your current exchange rates with the bank, including any port benefits. Use this when considering a 'trade_with_bank' action.
 Provide your reasoning in a 'thoughts' field and the chosen action in an 'action' field in JSON format.
 {example_str}
 Ensure your entire response is a single valid JSON object.

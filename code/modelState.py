@@ -74,6 +74,23 @@ class modelState():
             "buy_development_card": {"ORE": 1, "SHEEP": 1, "WHEAT": 1}
         }
 
+        # Bank trade ratios for the current player
+        self.current_player_bank_trade_ratios = {
+            "standard_rate": 4,
+            "has_general_3_to_1_port": False,
+            "specific_2_to_1_ports": {
+                "WOOD": False, "BRICK": False, "SHEEP": False, "WHEAT": False, "ORE": False
+            }
+        }
+        if hasattr(current_player, 'portList'):
+            if "3:1 PORT" in current_player.portList:
+                self.current_player_bank_trade_ratios["has_general_3_to_1_port"] = True
+
+            resource_types = ["WOOD", "BRICK", "SHEEP", "WHEAT", "ORE"]
+            for res_type in resource_types:
+                if f"2:1 {res_type}" in current_player.portList:
+                    self.current_player_bank_trade_ratios["specific_2_to_1_ports"][res_type] = True
+
     def get_available_actions(self, game, player_perspective, setup_road_pending, last_settlement_idx):
         """
         Determines the available actions for the current player based on the game state.
