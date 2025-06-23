@@ -757,6 +757,7 @@ class catanAIGame():
                     print(f"{currPlayer.name} taking main turn actions...")
                     state_for_main_turn = modelState(self, currPlayer)
                     action = currPlayer.get_llm_move(state_for_main_turn)
+                    print(f"{currPlayer.name} (Main Turn Thoughts: {currPlayer.thoughts}) -> Action: {action}")
                     # ... (action processing as before, same as previous step) ...
                     action_type = action.get("type")
                     if action_type == "build_road":
@@ -786,6 +787,58 @@ class catanAIGame():
                         res_give, res_receive = action.get("resource_to_give"), action.get("resource_to_receive")
                         if res_give and res_receive: currPlayer.trade_with_bank(res_give.upper(), res_receive.upper())
                         else: print(f"Missing resources for trade_with_bank for {currPlayer.name}")
+                    elif action_type == "propose_trade":
+                        partner_name = action.get("partner_player_name")
+                        offered = action.get("resources_offered")
+                        requested = action.get("resources_requested")
+                        if partner_name and offered and requested:
+                            print(f"{currPlayer.name} proposes a trade with {partner_name}. Offering: {offered}, Requesting: {requested}.")
+                            target_player = self._get_player_by_name(partner_name)
+                            if not target_player:
+                                print(f"Trade failed: Player {partner_name} not found.")
+                            elif target_player == currPlayer:
+                                print(f"Trade failed: Player cannot trade with themselves.")
+                            else:
+                                if isinstance(target_player, LLMPlayer):
+                                    print(f"Prompting {target_player.name} to respond to the trade offer...")
+                                    trade_state = modelState(self, target_player,
+                                                             trade_offer_pending=True,
+                                                             trade_offering_player_name=currPlayer.name,
+                                                             trade_resources_offered_to_you=offered,
+                                                             trade_resources_requested_from_you=requested)
+                                    trade_response_action = target_player.get_llm_move(trade_state)
+
+                                    print(f"{target_player.name} (Trade Offer Thoughts: {target_player.thoughts}) -> Response: {trade_response_action}")
+
+                                    if trade_response_action.get("type") == "accept_trade":
+                                        # Validate trade feasibility before execution
+                                        can_proposer_give = all(currPlayer.resources.get(res, 0) >= count for res, count in offered.items())
+                                        can_target_give = all(target_player.resources.get(res, 0) >= count for res, count in requested.items())
+
+                                        if can_proposer_give and can_target_give:
+                                            # Execute trade
+                                            for res, count in offered.items():
+                                                currPlayer.resources[res] -= count
+                                                target_player.resources[res] += count
+                                            for res, count in requested.items():
+                                                target_player.resources[res] -= count
+                                                currPlayer.resources[res] += count
+                                            print(f"Trade accepted and completed between {currPlayer.name} and {target_player.name}!")
+                                            print(f"{currPlayer.name} new resources: {currPlayer.resources}")
+                                            print(f"{target_player.name} new resources: {target_player.resources}")
+                                        else:
+                                            print(f"Trade accepted by {target_player.name}, but resources are insufficient. Trade cancelled.")
+                                            if not can_proposer_give: print(f"{currPlayer.name} lacks resources for offer.")
+                                            if not can_target_give: print(f"{target_player.name} lacks resources for request.")
+                                    else: # Implicitly reject_trade or invalid response
+                                        print(f"{target_player.name} rejected the trade or gave an invalid response.")
+                                elif isinstance(target_player, heuristicAIPlayer):
+                                    # Basic heuristic: always reject for now, or implement simple logic
+                                    print(f"Heuristic AI {target_player.name} automatically rejects trade with {currPlayer.name} for now.")
+                                else: # Human player target (not handled in AIGame, but for completeness)
+                                    print(f"Trade proposed to human player {target_player.name}. This is not handled in AI-only game mode.")
+                        else:
+                            print(f"Invalid propose_trade action from {currPlayer.name}: Missing parameters.")
                     elif action_type == "play_knight_card":
                         print(f"{currPlayer.name} wants to play a KNIGHT card (conceptual - not fully implemented).")
                         pass

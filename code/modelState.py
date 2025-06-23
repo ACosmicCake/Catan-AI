@@ -12,7 +12,11 @@ class modelState():
                  setup_road_placement_pending=False, # New flag
                  last_settlement_vertex_index=None, # New flag
                  last_action_status: str = None, # New field for feedback
-                 last_action_error_details: str = None): # New field for feedback
+                 last_action_error_details: str = None,
+                 trade_offer_pending: bool = False,
+                 trade_offering_player_name: str = None,
+                 trade_resources_offered_to_you: dict = None,
+                 trade_resources_requested_from_you: dict = None):
         self.board = self.get_board_state(catan_game.board)
         self.players = self.get_players_state(catan_game.playerQueue.queue, current_player, catan_game.board)
         self.current_player_name = current_player.name
@@ -57,6 +61,18 @@ class modelState():
         if last_action_error_details:
             self.last_action_error_details = last_action_error_details
 
+        self.trade_offer_pending = trade_offer_pending
+        if trade_offer_pending:
+            self.trade_offering_player_name = trade_offering_player_name
+            self.trade_resources_offered_to_you = trade_resources_offered_to_you
+            self.trade_resources_requested_from_you = trade_resources_requested_from_you
+
+        self.action_costs = {
+            "build_road": {"WOOD": 1, "BRICK": 1},
+            "build_settlement": {"WOOD": 1, "BRICK": 1, "SHEEP": 1, "WHEAT": 1},
+            "build_city": {"WHEAT": 2, "ORE": 3},
+            "buy_development_card": {"ORE": 1, "SHEEP": 1, "WHEAT": 1}
+        }
 
     def get_available_actions(self, game, player_perspective, setup_road_pending, last_settlement_idx):
         """
