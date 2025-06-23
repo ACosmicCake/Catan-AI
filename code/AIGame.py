@@ -123,60 +123,148 @@ class catanAIGame():
         for player_i in playerList: 
             print(f"\nSetup Turn 1: {player_i.name}")
             if isinstance(player_i, LLMPlayer):
-                # LLM places a settlement
+                # --- LLM places first settlement ---
                 print(f"{player_i.name} to place first settlement.")
-                current_model_state_settlement = modelState(self, player_i)
-                action_settlement = player_i.get_llm_move(current_model_state_settlement)
-                print(f"{player_i.name} (Thoughts for settlement: {player_i.thoughts}) -> Action: {action_settlement}")
+                settlement_placed_successfully = False
+                settlement_placement_attempts = 0
+                max_settlement_placement_attempts = 3
+                last_s_status, last_s_error = None, None
+                placed_settlement_v_idx = None
 
-                if action_settlement.get("type") == "build_settlement":
+                while not settlement_placed_successfully and settlement_placement_attempts < max_settlement_placement_attempts:
+                    settlement_placement_attempts += 1
+                    if settlement_placement_attempts > 1: print(f"Re-prompting {player_i.name} for settlement (attempt {settlement_placement_attempts})")
+
+                    current_model_state_settlement = modelState(self, player_i,
+                                                                last_action_status=last_s_status,
+                                                                last_action_error_details=last_s_error)
+                    last_s_status, last_s_error = None, None # Reset for next potential error
+
+                    action_settlement = player_i.get_llm_move(current_model_state_settlement)
+                    print(f"{player_i.name} (Thoughts for settlement: {player_i.thoughts}) -> Action: {action_settlement}")
+                    action_type = action_settlement.get("type")
                     v_idx = action_settlement.get("vertex_index")
-                    if v_idx is not None:
-                        v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
-                        if v_coord and not self.board.boardGraph[v_coord].isColonised:
-                            player_i.build_settlement(v_coord, self.board)
+
+                    if action_type == "build_settlement" and v_idx is not None:
+                        if v_idx in current_model_state_settlement.available_actions.get("build_settlement", []):
+                            v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
+                            # player.build_settlement needs a setup_phase flag or similar, or direct board update
+                            # For now, direct update as in catanGame.py's handle_llm_setup_placement
+                            self.board.boardGraph[v_coord].state['Player'] = player_i
+                            self.board.boardGraph[v_coord].state['Settlement'] = True
+                            self.board.boardGraph[v_coord].isColonised = True
+                            player_i.buildGraph['SETTLEMENTS'].append(v_coord)
+                            player_i.settlementsLeft -= 1
+                            player_i.victoryPoints += 1 # VP for setup settlements
+                            if((self.board.boardGraph[v_coord].port != False) and (self.board.boardGraph[v_coord].port not in player_i.portList)):
+                                player_i.portList.append(self.board.boardGraph[v_coord].port)
+
                             print(f"{player_i.name} built initial settlement at {v_idx}.")
+                            player_i.last_placed_settlement_v_idx = v_idx # Store for road prompt
+                            placed_settlement_v_idx = v_idx
+                            settlement_placed_successfully = True
                         else:
-                            print(f"{player_i.name} failed initial settlement at {v_idx} (invalid/occupied). Placing randomly.")
-                            self.execute_random_setup_settlement(player_i)
+                            last_s_status = "invalid_placement"
+                            last_s_error = f"Vertex {v_idx} is not a valid setup settlement location (e.g. occupied, too close, or rule violation). Valid are: {current_model_state_settlement.available_actions.get('build_settlement', [])}"
                     else:
-                        print(f"{player_i.name} did not provide valid settlement. Placing randomly.")
-                        self.execute_random_setup_settlement(player_i)
-                else:
-                    print(f"{player_i.name} did not choose to build settlement. Placing randomly.")
-                    self.execute_random_setup_settlement(player_i)
+                        last_s_status = "invalid_action_type_or_format"
+                        last_s_error = f"Expected 'build_settlement' action with 'vertex_index'. Got: {action_settlement}"
+
+                if not settlement_placed_successfully:
+                    print(f"CRITICAL: {player_i.name} failed to place first settlement after {max_settlement_placement_attempts} attempts. Halting setup for this player.")
+                    # In a real game, might need to skip player or exit. For now, we'll just not place the road.
+                    player_i.last_placed_settlement_v_idx = None # Ensure it's None
 
                 self.boardView.displayGameScreen()
                 pygame.time.delay(500)
 
-                print(f"{player_i.name} to place first road.")
-                current_model_state_road = modelState(self, player_i)
-                action_road = player_i.get_llm_move(current_model_state_road)
-                print(f"{player_i.name} (Thoughts for road: {player_i.thoughts}) -> Action: {action_road}")
+                # --- LLM places first road ---
+                if placed_settlement_v_idx is not None: # Only proceed if settlement was placed
+                    print(f"{player_i.name} to place first road connected to settlement at {placed_settlement_v_idx}.")
+                # Get the vertex index of the settlement just built (already stored in player_i.last_placed_settlement_v_idx)
+                last_settlement_pixel_coord = player_i.buildGraph['SETTLEMENTS'][-1]
+                # Convert pixel coord to vertex index (this might need a reverse lookup dict in board.py or a method)
+                # For now, assuming board.get_vertex_index_from_pixel(coord) exists or can be added
+                # Or, we can pass the v_idx from the settlement placement directly.
+                # Let's assume we got last_built_settlement_v_idx from the settlement phase.
+                # This part needs careful handling of how v_idx is retrieved/passed.
+                # For now, we'll rely on modelState to get it if we pass it during its creation.
+                # The 'last_settlement_vertex_index' will be set in modelState in step 4.
 
-                if action_road.get("type") == "build_road":
-                    v1_idx = action_road.get("v1_index")
-                    v2_idx = action_road.get("v2_index")
-                    if v1_idx is not None and v2_idx is not None:
-                        v1_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx)
-                        v2_coord = self.board.vertex_index_to_pixel_dict.get(v2_idx)
-                        if player_i.buildGraph['SETTLEMENTS']: # Check if a settlement exists
-                            last_settlement_coord = player_i.buildGraph['SETTLEMENTS'][-1]
-                            if v1_coord and v2_coord and (v1_coord == last_settlement_coord or v2_coord == last_settlement_coord):
-                                player_i.build_road(v1_coord, v2_coord, self.board)
-                                print(f"{player_i.name} built initial road from {v1_idx} to {v2_idx}.")
+                road_placement_attempts = 0
+                road_placed_successfully = False
+                max_road_placement_attempts = 2 # Allow one re-prompt
+
+                while not road_placed_successfully and road_placement_attempts < max_road_placement_attempts:
+                    road_placement_attempts += 1
+                    if road_placement_attempts > 1:
+                        print(f"Re-prompting {player_i.name} for road placement (attempt {road_placement_attempts}).")
+
+                    # modelState will now need 'setup_road_placement_pending' and 'last_settlement_vertex_index'
+                    # These will be added in the modelState.py modification step.
+                    # We need the v_idx of the settlement. We'll assume it's stored/retrieved correctly by modelState construction.
+                    # This relies on player_i.latest_settlement_v_idx being set after settlement build, or passed to modelState
+
+                    # Find the vertex_index of the last settlement:
+                    # This is a bit convoluted. player.build_settlement stores pixel coords.
+                    # We need the vertex_index that corresponds to player_i.buildGraph['SETTLEMENTS'][-1]
+                    # This requires a reverse mapping from pixel_coord to vertex_index in the board object or game.
+                    # Let's assume self.board.get_vertex_index_from_coord(pixel_coord) exists for now.
+                    # This is a placeholder until board or game state management is clearer on this.
+                    # For now, we'll assume the 'v_idx' from the successful settlement placement is available
+                    # If not, this part of the logic chain will fail.
+                    # Let's assume 'last_successful_settlement_v_idx' was stored on player_i or self after successful settlement.
+                    # This is a gap to be addressed if not already handled by modelState's access to game.
+
+                    # A simpler way: get the last built settlement's v_idx from the successful settlement action.
+                    # This was 'v_idx' in the settlement part. We need to ensure it's available here.
+                    road_placement_attempts = 0
+                    road_placed_successfully = False
+                    max_road_placement_attempts = 3
+                    last_r_status, last_r_error = None, None
+
+                    while not road_placed_successfully and road_placement_attempts < max_road_placement_attempts:
+                        road_placement_attempts += 1
+                        if road_placement_attempts > 1: print(f"Re-prompting {player_i.name} for road (attempt {road_placement_attempts})")
+
+                        current_model_state_road = modelState(self, player_i,
+                                                              setup_road_placement_pending=True,
+                                                              last_settlement_vertex_index=placed_settlement_v_idx, # Use the v_idx from successful settlement
+                                                              last_action_status=last_r_status,
+                                                              last_action_error_details=last_r_error)
+                        last_r_status, last_r_error = None, None # Reset
+
+                        action_road = player_i.get_llm_move(current_model_state_road)
+                        print(f"{player_i.name} (Thoughts for road: {player_i.thoughts}) -> Action: {action_road}")
+                        action_type_road = action_road.get("type")
+                        v1_idx_road = action_road.get("v1_index")
+                        v2_idx_road = action_road.get("v2_index")
+
+                        if action_type_road == "build_road" and v1_idx_road is not None and v2_idx_road is not None:
+                            chosen_road_pair = tuple(sorted((v1_idx_road, v2_idx_road)))
+                            # Validate connection to the new settlement
+                            if not (v1_idx_road == placed_settlement_v_idx or v2_idx_road == placed_settlement_v_idx):
+                                last_r_status = "invalid_placement"
+                                last_r_error = f"Road {chosen_road_pair} must connect to the new settlement at vertex {placed_settlement_v_idx}."
+                            elif chosen_road_pair in current_model_state_road.available_actions.get("build_road", []):
+                                v1_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx_road)
+                                v2_coord = self.board.vertex_index_to_pixel_dict.get(v2_idx_road)
+                                if player_i.build_road(v1_coord, v2_coord, self.board, setup_phase=True):
+                                    print(f"{player_i.name} built initial road from {v1_idx_road} to {v2_idx_road}.")
+                                    road_placed_successfully = True
+                                else: # Should not happen if resources are not an issue in setup and road is valid
+                                    last_r_status = "internal_error"
+                                    last_r_error = "player.build_road returned False for setup road unexpectedly."
                             else:
-                                print(f"{player_i.name} failed initial road (invalid/not adjacent). Placing randomly.")
-                                self.execute_random_setup_road(player_i)
-                        else: # Should not happen if settlement placement was successful
-                            print(f"{player_i.name} has no settlement to build road from. Placing randomly.")
-                            self.execute_random_setup_road(player_i) # This might still fail if no settlements
-                    else:
-                        print(f"{player_i.name} did not provide valid road. Placing randomly.")
-                        self.execute_random_setup_road(player_i)
-                else:
-                    print(f"{player_i.name} did not choose to build road. Placing randomly.")
-                    self.execute_random_setup_road(player_i)
+                                last_r_status = "invalid_placement"
+                                last_r_error = f"Road {chosen_road_pair} is not a valid setup road. Valid are: {current_model_state_road.available_actions.get('build_road', [])}"
+                        else:
+                            last_r_status = "invalid_action_type_or_format"
+                            last_r_error = f"Expected 'build_road' action with 'v1_index' and 'v2_index'. Got: {action_road}"
+
+                    if not road_placed_successfully:
+                        print(f"CRITICAL: {player_i.name} failed to place first road after {max_road_placement_attempts} attempts.")
+                        # No random fallback. Game might be in inconsistent state.
 
             elif isinstance(player_i, heuristicAIPlayer): # Heuristic AI setup
                 print(f"{player_i.name} (Heuristic AI) performing initial setup (1st round).")
@@ -191,69 +279,107 @@ class catanAIGame():
         for player_i in playerList:
             print(f"\nSetup Turn 2: {player_i.name}")
             if isinstance(player_i, LLMPlayer):
+                # --- LLM places second settlement ---
                 print(f"{player_i.name} to place second settlement.")
-                # ... (LLM settlement placement logic as above, with distance rule check) ...
-                current_model_state_settlement = modelState(self, player_i)
-                action_settlement = player_i.get_llm_move(current_model_state_settlement)
-                print(f"{player_i.name} (Thoughts for settlement: {player_i.thoughts}) -> Action: {action_settlement}")
+                settlement_placed_successfully = False
+                settlement_placement_attempts = 0
+                max_settlement_placement_attempts = 3
+                last_s_status, last_s_error = None, None
+                placed_settlement_v_idx = None
 
-                if action_settlement.get("type") == "build_settlement":
+                while not settlement_placed_successfully and settlement_placement_attempts < max_settlement_placement_attempts:
+                    settlement_placement_attempts += 1
+                    if settlement_placement_attempts > 1: print(f"Re-prompting {player_i.name} for 2nd settlement (attempt {settlement_placement_attempts})")
+
+                    current_model_state_settlement = modelState(self, player_i,
+                                                                last_action_status=last_s_status,
+                                                                last_action_error_details=last_s_error)
+                    last_s_status, last_s_error = None, None # Reset
+
+                    action_settlement = player_i.get_llm_move(current_model_state_settlement)
+                    print(f"{player_i.name} (Thoughts for 2nd settlement: {player_i.thoughts}) -> Action: {action_settlement}")
+                    action_type = action_settlement.get("type")
                     v_idx = action_settlement.get("vertex_index")
-                    if v_idx is not None:
-                        v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
-                        if v_coord and not self.board.boardGraph[v_coord].isColonised:
-                            valid_placement = True
-                            for neighbor_v_pixel_idx_key in self.board.boardGraph[v_coord].edgeList: # edgeList contains pixel coords
-                                if self.board.boardGraph[neighbor_v_pixel_idx_key].isColonised:
-                                    valid_placement = False; break
-                            if valid_placement:
-                                player_i.build_settlement(v_coord, self.board)
-                                print(f"{player_i.name} built initial settlement at {v_idx}.")
-                            else:
-                                print(f"{player_i.name} failed initial settlement at {v_idx} (too close). Placing randomly.")
-                                self.execute_random_setup_settlement(player_i)
+
+                    if action_type == "build_settlement" and v_idx is not None:
+                        if v_idx in current_model_state_settlement.available_actions.get("build_settlement", []):
+                            v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
+                            # Direct board update for setup settlement
+                            self.board.boardGraph[v_coord].state['Player'] = player_i
+                            self.board.boardGraph[v_coord].state['Settlement'] = True
+                            self.board.boardGraph[v_coord].isColonised = True
+                            player_i.buildGraph['SETTLEMENTS'].append(v_coord)
+                            player_i.settlementsLeft -= 1
+                            player_i.victoryPoints += 1
+                            if((self.board.boardGraph[v_coord].port != False) and (self.board.boardGraph[v_coord].port not in player_i.portList)):
+                                player_i.portList.append(self.board.boardGraph[v_coord].port)
+
+                            print(f"{player_i.name} built 2nd initial settlement at {v_idx}.")
+                            player_i.last_placed_settlement_v_idx = v_idx
+                            placed_settlement_v_idx = v_idx
+                            settlement_placed_successfully = True
                         else:
-                            print(f"{player_i.name} failed initial settlement at {v_idx} (invalid/occupied). Placing randomly.")
-                            self.execute_random_setup_settlement(player_i)
+                            last_s_status = "invalid_placement"
+                            last_s_error = f"Vertex {v_idx} is not a valid setup settlement location. Valid are: {current_model_state_settlement.available_actions.get('build_settlement', [])}"
                     else:
-                        print(f"{player_i.name} did not provide valid settlement. Placing randomly.")
-                        self.execute_random_setup_settlement(player_i)
-                else:
-                    print(f"{player_i.name} did not choose to build settlement. Placing randomly.")
-                    self.execute_random_setup_settlement(player_i)
+                        last_s_status = "invalid_action_type_or_format"
+                        last_s_error = f"Expected 'build_settlement' action with 'vertex_index'. Got: {action_settlement}"
+
+                if not settlement_placed_successfully:
+                    print(f"CRITICAL: {player_i.name} failed to place 2nd settlement after {max_settlement_placement_attempts} attempts. Halting setup.")
+                    player_i.last_placed_settlement_v_idx = None
 
                 self.boardView.displayGameScreen()
                 pygame.time.delay(500)
 
-                print(f"{player_i.name} to place second road.")
-                # ... (LLM road placement logic as above) ...
-                current_model_state_road = modelState(self, player_i)
-                action_road = player_i.get_llm_move(current_model_state_road)
-                print(f"{player_i.name} (Thoughts for road: {player_i.thoughts}) -> Action: {action_road}")
+                # --- LLM places second road ---
+                if placed_settlement_v_idx is not None:
+                    print(f"{player_i.name} to place second road connected to settlement at {placed_settlement_v_idx}.")
+                    road_placement_attempts = 0
+                    road_placed_successfully = False
+                    max_road_placement_attempts = 3
+                    last_r_status, last_r_error = None, None
 
-                if action_road.get("type") == "build_road":
-                    v1_idx = action_road.get("v1_index")
-                    v2_idx = action_road.get("v2_index")
-                    if v1_idx is not None and v2_idx is not None:
-                        v1_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx)
-                        v2_coord = self.board.vertex_index_to_pixel_dict.get(v2_idx)
-                        if player_i.buildGraph['SETTLEMENTS']:
-                            last_settlement_coord = player_i.buildGraph['SETTLEMENTS'][-1]
-                            if v1_coord and v2_coord and (v1_coord == last_settlement_coord or v2_coord == last_settlement_coord):
-                                player_i.build_road(v1_coord, v2_coord, self.board)
-                                print(f"{player_i.name} built initial road from {v1_idx} to {v2_idx}.")
+                    while not road_placed_successfully and road_placement_attempts < max_road_placement_attempts:
+                        road_placement_attempts += 1
+                        if road_placement_attempts > 1: print(f"Re-prompting {player_i.name} for 2nd road (attempt {road_placement_attempts})")
+
+                        current_model_state_road = modelState(self, player_i,
+                                                              setup_road_placement_pending=True,
+                                                              last_settlement_vertex_index=placed_settlement_v_idx,
+                                                              last_action_status=last_r_status,
+                                                              last_action_error_details=last_r_error)
+                        last_r_status, last_r_error = None, None
+
+                        action_road = player_i.get_llm_move(current_model_state_road)
+                        print(f"{player_i.name} (Thoughts for 2nd road: {player_i.thoughts}) -> Action: {action_road}")
+                        action_type_road = action_road.get("type")
+                        v1_idx_road = action_road.get("v1_index")
+                        v2_idx_road = action_road.get("v2_index")
+
+                        if action_type_road == "build_road" and v1_idx_road is not None and v2_idx_road is not None:
+                            chosen_road_pair = tuple(sorted((v1_idx_road, v2_idx_road)))
+                            if not (v1_idx_road == placed_settlement_v_idx or v2_idx_road == placed_settlement_v_idx):
+                                last_r_status = "invalid_placement"
+                                last_r_error = f"Road {chosen_road_pair} must connect to the new settlement at vertex {placed_settlement_v_idx}."
+                            elif chosen_road_pair in current_model_state_road.available_actions.get("build_road", []):
+                                v1_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx_road)
+                                v2_coord = self.board.vertex_index_to_pixel_dict.get(v2_idx_road)
+                                if player_i.build_road(v1_coord, v2_coord, self.board, setup_phase=True):
+                                    print(f"{player_i.name} built 2nd initial road from {v1_idx_road} to {v2_idx_road}.")
+                                    road_placed_successfully = True
+                                else:
+                                    last_r_status = "internal_error"
+                                    last_r_error = "player.build_road returned False for 2nd setup road unexpectedly."
                             else:
-                                print(f"{player_i.name} failed initial road (invalid/not adjacent). Placing randomly.")
-                                self.execute_random_setup_road(player_i)
+                                last_r_status = "invalid_placement"
+                                last_r_error = f"Road {chosen_road_pair} is not a valid 2nd setup road. Valid are: {current_model_state_road.available_actions.get('build_road', [])}"
                         else:
-                             print(f"{player_i.name} has no settlement to build road from. Placing randomly.")
-                             self.execute_random_setup_road(player_i)
-                    else:
-                        print(f"{player_i.name} did not provide valid road. Placing randomly.")
-                        self.execute_random_setup_road(player_i)
-                else:
-                    print(f"{player_i.name} did not choose to build road. Placing randomly.")
-                    self.execute_random_setup_road(player_i)
+                            last_r_status = "invalid_action_type_or_format"
+                            last_r_error = f"Expected 'build_road' action with 'v1_index' and 'v2_index'. Got: {action_road}"
+
+                    if not road_placed_successfully:
+                        print(f"CRITICAL: {player_i.name} failed to place 2nd road after {max_road_placement_attempts} attempts.")
 
             elif isinstance(player_i, heuristicAIPlayer): # Heuristic AI setup
                 print(f"{player_i.name} (Heuristic AI) performing initial setup (2nd round).")
@@ -513,14 +639,16 @@ class catanAIGame():
             if sum(p_other.resources.values()) == 0: # Cannot rob player with no resources
                 continue
             for settlement_coord in p_other.buildGraph['SETTLEMENTS']:
-                 if self.board.hexTileDict[target_hex_idx] in self.board.boardGraph[settlement_coord].get_adjacent_hex_tiles(self.board): # Assuming get_adjacent_hex_tiles method exists
+                # A settlement_coord is a key to self.board.boardGraph, which gives a Vertex object
+                # The Vertex object has an adjacentHexList (list of hex indices)
+                if target_hex_idx in self.board.boardGraph[settlement_coord].adjacentHexList:
                     if p_other not in players_on_hex: players_on_hex.append(p_other)
-                    break
-            if p_other in players_on_hex: continue # Already found
+                    break # Found this player via one of their settlements, no need to check other settlements for same player
+            if p_other in players_on_hex: continue # Already found this player (e.g. via a settlement), skip checking their cities for list append
             for city_coord in p_other.buildGraph['CITIES']:
-                 if self.board.hexTileDict[target_hex_idx] in self.board.boardGraph[city_coord].get_adjacent_hex_tiles(self.board):
+                if target_hex_idx in self.board.boardGraph[city_coord].adjacentHexList:
                     if p_other not in players_on_hex: players_on_hex.append(p_other)
-                    break
+                    break # Found this player via one of their cities
 
         player_to_rob_obj = None
         if players_on_hex:
@@ -631,6 +759,7 @@ class catanAIGame():
                     print(f"{currPlayer.name} taking main turn actions...")
                     state_for_main_turn = modelState(self, currPlayer)
                     action = currPlayer.get_llm_move(state_for_main_turn)
+                    print(f"{currPlayer.name} (Main Turn Thoughts: {currPlayer.thoughts}) -> Action: {action}")
                     # ... (action processing as before, same as previous step) ...
                     action_type = action.get("type")
                     if action_type == "build_road":
@@ -660,6 +789,58 @@ class catanAIGame():
                         res_give, res_receive = action.get("resource_to_give"), action.get("resource_to_receive")
                         if res_give and res_receive: currPlayer.trade_with_bank(res_give.upper(), res_receive.upper())
                         else: print(f"Missing resources for trade_with_bank for {currPlayer.name}")
+                    elif action_type == "propose_trade":
+                        partner_name = action.get("partner_player_name")
+                        offered = action.get("resources_offered")
+                        requested = action.get("resources_requested")
+                        if partner_name and offered and requested:
+                            print(f"{currPlayer.name} proposes a trade with {partner_name}. Offering: {offered}, Requesting: {requested}.")
+                            target_player = self._get_player_by_name(partner_name)
+                            if not target_player:
+                                print(f"Trade failed: Player {partner_name} not found.")
+                            elif target_player == currPlayer:
+                                print(f"Trade failed: Player cannot trade with themselves.")
+                            else:
+                                if isinstance(target_player, LLMPlayer):
+                                    print(f"Prompting {target_player.name} to respond to the trade offer...")
+                                    trade_state = modelState(self, target_player,
+                                                             trade_offer_pending=True,
+                                                             trade_offering_player_name=currPlayer.name,
+                                                             trade_resources_offered_to_you=offered,
+                                                             trade_resources_requested_from_you=requested)
+                                    trade_response_action = target_player.get_llm_move(trade_state)
+
+                                    print(f"{target_player.name} (Trade Offer Thoughts: {target_player.thoughts}) -> Response: {trade_response_action}")
+
+                                    if trade_response_action.get("type") == "accept_trade":
+                                        # Validate trade feasibility before execution
+                                        can_proposer_give = all(currPlayer.resources.get(res, 0) >= count for res, count in offered.items())
+                                        can_target_give = all(target_player.resources.get(res, 0) >= count for res, count in requested.items())
+
+                                        if can_proposer_give and can_target_give:
+                                            # Execute trade
+                                            for res, count in offered.items():
+                                                currPlayer.resources[res] -= count
+                                                target_player.resources[res] += count
+                                            for res, count in requested.items():
+                                                target_player.resources[res] -= count
+                                                currPlayer.resources[res] += count
+                                            print(f"Trade accepted and completed between {currPlayer.name} and {target_player.name}!")
+                                            print(f"{currPlayer.name} new resources: {currPlayer.resources}")
+                                            print(f"{target_player.name} new resources: {target_player.resources}")
+                                        else:
+                                            print(f"Trade accepted by {target_player.name}, but resources are insufficient. Trade cancelled.")
+                                            if not can_proposer_give: print(f"{currPlayer.name} lacks resources for offer.")
+                                            if not can_target_give: print(f"{target_player.name} lacks resources for request.")
+                                    else: # Implicitly reject_trade or invalid response
+                                        print(f"{target_player.name} rejected the trade or gave an invalid response.")
+                                elif isinstance(target_player, heuristicAIPlayer):
+                                    # Basic heuristic: always reject for now, or implement simple logic
+                                    print(f"Heuristic AI {target_player.name} automatically rejects trade with {currPlayer.name} for now.")
+                                else: # Human player target (not handled in AIGame, but for completeness)
+                                    print(f"Trade proposed to human player {target_player.name}. This is not handled in AI-only game mode.")
+                        else:
+                            print(f"Invalid propose_trade action from {currPlayer.name}: Missing parameters.")
                     elif action_type == "play_knight_card":
                         print(f"{currPlayer.name} wants to play a KNIGHT card (conceptual - not fully implemented).")
                         pass

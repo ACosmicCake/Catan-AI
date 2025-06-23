@@ -22,27 +22,93 @@ class LLMPlayer(player):
     def _construct_prompt(self, game_state_obj):
         game_state_json = game_state_obj.to_json() # Serialize here for the prompt content
 
+        previous_action_feedback = ""
+        if hasattr(game_state_obj, 'last_action_status') and game_state_obj.last_action_status:
+            previous_action_feedback = f"Feedback on your last attempt: Status: {game_state_obj.last_action_status}."
+            if hasattr(game_state_obj, 'last_action_error_details') and game_state_obj.last_action_error_details:
+                previous_action_feedback += f" Details: {game_state_obj.last_action_error_details}."
+            previous_action_feedback += " Please try a different valid action or correct your previous one.\n"
+
         instructions = "Your turn to make a move. Analyze the game state and decide on the best action."
-        possible_actions = "Your possible actions are: build_road, build_settlement, build_city, buy_development_card, trade_with_bank, end_turn."
+        possible_actions = "Your possible actions are: build_road, build_settlement, build_city, buy_development_card, trade_with_bank, propose_trade, end_turn."
+        # Note: play_dev_card, discard_cards are also actions but might need more specific prompting.
+        # The available_actions in modelState should be the primary guide for the LLM.
+
         example_actions = [
             {"thoughts": "I should build a road to expand.", "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}},
             {"thoughts": "I want to build a settlement at vertex 5.", "action": {"type": "build_settlement", "vertex_index": 5}},
+            {"thoughts": "I need BRICK. I'll offer 1 WOOD for 1 BRICK to Player2-AI.", "action": {"type": "propose_trade", "partner_player_name": "Player2-AI-Name", "resources_offered": {"WOOD": 1}, "resources_requested": {"BRICK": 1}}},
             {"thoughts": "I will end my turn.", "action": {"type": "end_turn"}}
         ]
 
+        # Specific instructions based on game state take precedence
         if hasattr(game_state_obj, 'robber_movement_is_mandatory') and game_state_obj.robber_movement_is_mandatory:
-            instructions = "A 7 was rolled and you must move the robber. This is your only action for this specific decision."
-            possible_actions = "Your ONLY action for this decision must be: move_robber."
+            instructions = "A 7 was rolled and you MUST move the robber. This is your only action for this specific decision."
+            possible_actions = "Your ONLY action for this decision must be: move_robber. Consult 'available_actions' in the game state for valid hex indices to move the robber to (generally any hex not currently occupied by the robber)."
             example_actions = [
                 {"thoughts": "I need to move the robber. I'll choose hex 10 and target Player X if available.", "action": {"type": "move_robber", "hex_index": 10, "player_to_rob_name": "PlayerX_Name_Or_Null"}}
             ]
         elif hasattr(game_state_obj, 'discard_is_mandatory') and game_state_obj.discard_is_mandatory:
             num_to_discard = game_state_obj.num_cards_to_discard
-            instructions = f"You rolled a 7 and have too many cards. You MUST discard {num_to_discard} resources. This is your only action for this specific decision."
-            possible_actions = "Your ONLY action for this decision must be: discard_cards."
+            instructions = f"You rolled a 7 and have too many cards. You MUST discard {num_to_discard} resource cards in total. This is your only action for this specific decision."
+            possible_actions = "Your ONLY action for this decision must be: discard_cards. Provide the resources to discard in a dictionary format, ensuring the sum of values equals the required discard number."
+
+            # Construct a simple, generic example for the discard action's structure
+            example_resource_breakdown = {}
+            if num_to_discard == 1:
+                example_resource_breakdown = {"WOOD": 1} # Or any single resource type
+            elif num_to_discard == 2:
+                example_resource_breakdown = {"WOOD": 1, "SHEEP": 1}
+            elif num_to_discard > 2:
+                # Example: discard 1 of two types, and the rest of a third, or similar simple structure
+                example_resource_breakdown = {"WOOD": 1, "SHEEP": 1, "BRICK": num_to_discard - 2}
+                if num_to_discard - 2 <= 0: # handles num_to_discard = 2 already covered, but as safeguard
+                    example_resource_breakdown = {"WOOD": num_to_discard // 2, "SHEEP": num_to_discard - (num_to_discard // 2)}
+
             example_actions = [
-                {"thoughts": f"I must discard {num_to_discard} cards. I'll discard some wood and sheep.", "action": {"type": "discard_cards", "resources": {"WOOD": 1, "SHEEP": 1}}} # Example, actual counts must sum to num_to_discard
+                {"thoughts": f"I must discard {num_to_discard} cards. I will choose from the resources I currently possess (e.g., WOOD, SHEEP, BRICK), making sure the total number of cards discarded is exactly {num_to_discard}. The specific resources I choose will depend on what I have and my strategy.",
+                 "action": {"type": "discard_cards", "resources": example_resource_breakdown }}
             ]
+
+        elif hasattr(game_state_obj, 'trade_offer_pending') and game_state_obj.trade_offer_pending:
+            offering_player = game_state_obj.trade_offering_player_name
+            offered_res = game_state_obj.trade_resources_offered_to_you
+            requested_res = game_state_obj.trade_resources_requested_from_you
+            instructions = (f"Player {offering_player} has proposed a trade with you. "
+                            f"They are offering you: {json.dumps(offered_res)}. "
+                            f"They are requesting from you: {json.dumps(requested_res)}. "
+                            "You must decide to 'accept_trade' or 'reject_trade'. This is your only action for this decision.")
+            possible_actions = "Your ONLY actions for this decision are: accept_trade, reject_trade."
+            example_actions = [
+                {"thoughts": "This trade benefits me, I have the resources they want and need what they offer.", "action": {"type": "accept_trade"}},
+                {"thoughts": "This trade is not good for me.", "action": {"type": "reject_trade"}}
+            ]
+
+        elif hasattr(game_state_obj, 'setup_road_placement_pending') and game_state_obj.setup_road_placement_pending and hasattr(game_state_obj, 'last_settlement_vertex_index'):
+            last_settlement_v_idx = game_state_obj.last_settlement_vertex_index
+            instructions = f"You have just placed a settlement at vertex {last_settlement_v_idx}. You MUST now build a road connected to this new settlement. This is your only action."
+            possible_actions = "Your ONLY action for this decision must be: build_road."
+            # Find a valid neighbor for the example. This is tricky without full board access here.
+            # We'll use a placeholder. The LLM should use available_road_locations from game_state.
+            example_v2_idx = "any_valid_neighbor_of_" + str(last_settlement_v_idx)
+            # Try to get a valid neighbor from available_road_locations if present in game_state_obj
+            if hasattr(game_state_obj, 'available_actions') and 'build_road' in game_state_obj.available_actions:
+                if game_state_obj.available_actions['build_road']: # Check if list is not empty
+                    # Assuming available_actions['build_road'] is a list of tuples like [(v1,v2), ...]
+                    # And we need to find one where v1 or v2 is last_settlement_v_idx
+                    for r_v1, r_v2 in game_state_obj.available_actions['build_road']:
+                        if r_v1 == last_settlement_v_idx:
+                            example_v2_idx = r_v2
+                            break
+                        elif r_v2 == last_settlement_v_idx:
+                            # Ensure the example uses last_settlement_v_idx as v1_index if it's not already
+                            # This is just for consistency in the example.
+                            example_v2_idx = r_v1 # The other end of the road
+                            break
+            example_actions = [
+                {"thoughts": f"I just built a settlement at vertex {last_settlement_v_idx}. Now I must build an adjacent road. I will connect it to vertex {example_v2_idx}.", "action": {"type": "build_road", "v1_index": last_settlement_v_idx, "v2_index": example_v2_idx}}
+            ]
+
 
         # Construct example string
         example_str = "For example: " + json.dumps(example_actions[0])
@@ -54,8 +120,11 @@ class LLMPlayer(player):
 You are an expert Settlers of Catan player. Here is the current game state:
 {game_state_json}
 
-{instructions}
+{previous_action_feedback}{instructions}
 {possible_actions}
+Refer to the 'available_actions' section within the game state JSON to see currently valid locations for building.
+The 'action_costs' section lists the resource costs for standard building actions.
+The 'current_player_bank_trade_ratios' section details your current exchange rates with the bank, including any port benefits. Use this when considering a 'trade_with_bank' action.
 Provide your reasoning in a 'thoughts' field and the chosen action in an 'action' field in JSON format.
 {example_str}
 Ensure your entire response is a single valid JSON object.
@@ -71,29 +140,45 @@ Ensure your entire response is a single valid JSON object.
             # ... (existing placeholder logic for non-Gemini LLMs for mandatory actions) ...
             if hasattr(game_state, 'robber_movement_is_mandatory') and game_state.robber_movement_is_mandatory:
                 self.thoughts = f"{self.llm_type} placeholder: Mandatory robber move. Moving to hex 10."
-                other_player_name = None; # ... (find other player logic as before)
+                other_player_name = None
                 if hasattr(game_state, 'players'):
                     for p_state in game_state.players:
-                        if p_state['name'] != self.name: other_player_name = p_state['name']; break
+                        if p_state['name'] != self.name:
+                            other_player_name = p_state['name']
+                            break
                 llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "move_robber", "hex_index": 10, "player_to_rob_name": other_player_name}})
             elif hasattr(game_state, 'discard_is_mandatory') and game_state.discard_is_mandatory:
                 num_to_discard = game_state.num_cards_to_discard
-                self.thoughts = f"{self.llm_type} placeholder: Must discard {num_to_discard} cards."
-                resources_to_discard_placeholder = {}; # ... (simplified discard placeholder logic as before) ...
-                temp_discard_count = 0; my_resources = {}
-                for p_state in game_state.players:
-                    if p_state['name'] == self.name: my_resources = p_state['resources']; break
-                for res, count in my_resources.items():
-                    if count > 0 and temp_discard_count < num_to_discard : resources_to_discard_placeholder[res] = 1; temp_discard_count += 1
-                    if temp_discard_count == num_to_discard: break
-                if temp_discard_count < num_to_discard and resources_to_discard_placeholder:
-                    first_res_key = list(resources_to_discard_placeholder.keys())[0]; resources_to_discard_placeholder[first_res_key] += (num_to_discard - temp_discard_count)
-                if not resources_to_discard_placeholder and num_to_discard > 0 :
-                     for res, count in my_resources.items():
-                        if count >= num_to_discard: resources_to_discard_placeholder[res] = num_to_discard; break
-                        elif count > 0 : resources_to_discard_placeholder[res] = count; break
-                llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "discard_cards", "resources": resources_to_discard_placeholder}})
+                self.thoughts = f"{self.llm_type} placeholder: Must discard {num_to_discard} cards. Will pick randomly from own resources."
 
+                my_resources_dict = {}
+                if hasattr(game_state, 'players'):
+                    for p_state in game_state.players:
+                        if p_state['name'] == self.name:
+                            my_resources_dict = p_state['resources']
+                            break
+
+                resources_to_discard_placeholder = {}
+                if num_to_discard > 0 and my_resources_dict:
+                    # Create a flat list of all available cards
+                    available_cards_flat = []
+                    for resource, count in my_resources_dict.items():
+                        available_cards_flat.extend([resource] * count)
+
+                    # Shuffle and pick num_to_discard
+                    import random
+                    random.shuffle(available_cards_flat)
+
+                    cards_chosen_for_discard = available_cards_flat[:num_to_discard]
+
+                    # Count them up for the JSON structure
+                    for card in cards_chosen_for_discard:
+                        resources_to_discard_placeholder[card] = resources_to_discard_placeholder.get(card, 0) + 1
+
+                # Safety check: if somehow the above failed or not enough cards, this will result in an empty dict,
+                # which AIGame.py's validation will catch and use _execute_random_discard.
+                # This is better than the previous complex logic that might create invalid discards.
+                llm_response_json_str = json.dumps({"thoughts": self.thoughts, "action": {"type": "discard_cards", "resources": resources_to_discard_placeholder}})
 
         if llm_response_json_str is None: # Process this block if it's Gemini OR other LLM with no mandatory action
             if self.llm_type == 'gemini':

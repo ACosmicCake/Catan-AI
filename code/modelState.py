@@ -8,23 +8,42 @@ class modelState():
     def __init__(self, catan_game, current_player,
                  robber_movement_is_mandatory=False,
                  discard_is_mandatory=False,
-                 num_cards_to_discard=0):
+                 num_cards_to_discard=0,
+                 setup_road_placement_pending=False, # New flag
+                 last_settlement_vertex_index=None, # New flag
+                 last_action_status: str = None, # New field for feedback
+                 last_action_error_details: str = None,
+                 trade_offer_pending: bool = False,
+                 trade_offering_player_name: str = None,
+                 trade_resources_offered_to_you: dict = None,
+                 trade_resources_requested_from_you: dict = None):
         self.board = self.get_board_state(catan_game.board)
         self.players = self.get_players_state(catan_game.playerQueue.queue, current_player, catan_game.board)
         self.current_player_name = current_player.name
 
         # Game phase (setup or main)
-        is_setup_phase = True
-        if hasattr(current_player, 'buildGraph') and len(current_player.buildGraph.get('SETTLEMENTS', [])) >= 2:
-            is_setup_phase = False
-            if hasattr(catan_game, 'gameSetup'): # Prefer explicit game state if available
-                 is_setup_phase = catan_game.gameSetup
+        # The game_phase logic seems a bit complex; game.gameSetup should be the primary source of truth.
+        if hasattr(catan_game, 'gameSetup'):
+            is_setup_phase = catan_game.gameSetup
+        elif hasattr(current_player, 'buildGraph') and len(current_player.buildGraph.get('SETTLEMENTS', [])) < 2:
+            # Fallback if gameSetup is not present, infer from player's settlements
+            is_setup_phase = True
+        else:
+            is_setup_phase = False # Default if neither condition met
+
         self.game_phase = "setup" if is_setup_phase else "main"
 
         # Flags for special actions required by the current_player
         self.robber_movement_is_mandatory = robber_movement_is_mandatory
         self.discard_is_mandatory = discard_is_mandatory
         self.num_cards_to_discard = num_cards_to_discard if discard_is_mandatory else 0
+
+        self.setup_road_placement_pending = setup_road_placement_pending
+        if setup_road_placement_pending and last_settlement_vertex_index is not None:
+            self.last_settlement_vertex_index = last_settlement_vertex_index
+
+        # Populate available actions - this needs to be aware of setup_road_placement_pending
+        self.available_actions = self.get_available_actions(catan_game, current_player, setup_road_placement_pending, last_settlement_vertex_index)
 
         # Add current player's total resource count if they need to discard
         # This helps the LLM verify its discard if this info is passed for the discarding player.
@@ -35,6 +54,112 @@ class modelState():
         else:
             self.current_player_total_resources = 0
 
+        # Store feedback fields if provided
+        # These are dynamically set by catanGame.py before serializing for the LLM if a retry is needed.
+        if last_action_status:
+            self.last_action_status = last_action_status
+        if last_action_error_details:
+            self.last_action_error_details = last_action_error_details
+
+        self.trade_offer_pending = trade_offer_pending
+        if trade_offer_pending:
+            self.trade_offering_player_name = trade_offering_player_name
+            self.trade_resources_offered_to_you = trade_resources_offered_to_you
+            self.trade_resources_requested_from_you = trade_resources_requested_from_you
+
+        self.action_costs = {
+            "build_road": {"WOOD": 1, "BRICK": 1},
+            "build_settlement": {"WOOD": 1, "BRICK": 1, "SHEEP": 1, "WHEAT": 1},
+            "build_city": {"WHEAT": 2, "ORE": 3},
+            "buy_development_card": {"ORE": 1, "SHEEP": 1, "WHEAT": 1}
+        }
+
+        # Bank trade ratios for the current player
+        self.current_player_bank_trade_ratios = {
+            "standard_rate": 4,
+            "has_general_3_to_1_port": False,
+            "specific_2_to_1_ports": {
+                "WOOD": False, "BRICK": False, "SHEEP": False, "WHEAT": False, "ORE": False
+            }
+        }
+        if hasattr(current_player, 'portList'):
+            if "3:1 PORT" in current_player.portList:
+                self.current_player_bank_trade_ratios["has_general_3_to_1_port"] = True
+
+            resource_types = ["WOOD", "BRICK", "SHEEP", "WHEAT", "ORE"]
+            for res_type in resource_types:
+                if f"2:1 {res_type}" in current_player.portList:
+                    self.current_player_bank_trade_ratios["specific_2_to_1_ports"][res_type] = True
+
+    def get_available_actions(self, game, player_perspective, setup_road_pending, last_settlement_idx):
+        """
+        Determines the available actions for the current player based on the game state.
+        This is a simplified version and might need to be more comprehensive.
+        """
+        actions = {
+            "build_settlement": [],
+            "build_city": [],
+            "build_road": []
+            # "buy_development_card": True, # Simplified: assumes player can always try if they have resources
+            # "trade_with_bank": True,    # Simplified
+            # "play_knight_card": True, # Simplified, depends on having the card
+            # "end_turn": True
+        }
+
+        pixel_to_vertex_index_map = {v_pixel: v_idx for v_idx, v_pixel in game.board.vertex_index_to_pixel_dict.items()}
+
+        if self.game_phase == "setup":
+            if setup_road_pending:
+                # Only road building is allowed, specifically from last_settlement_idx
+                # board.get_setup_roads(player) should correctly use player.buildGraph['SETTLEMENTS'][-1]
+                # We must ensure that player.buildGraph reflects the settlement at last_settlement_idx
+                # This means the settlement must have been "officially" built and added to player.buildGraph
+                # before this modelState is created for the road.
+                potential_roads_coords = game.board.get_setup_roads(player_perspective)
+            else: # Setup settlement placement
+                potential_settlements_coords = game.board.get_setup_settlements(player_perspective)
+                for v_coord in potential_settlements_coords.keys():
+                    v_idx = pixel_to_vertex_index_map.get(v_coord)
+                    if v_idx is not None: actions["build_settlement"].append(v_idx)
+                # No roads or cities in this specific setup sub-phase via LLM choice
+                potential_roads_coords = {} # Explicitly empty
+
+        else: # Main game phase
+            # Settlements
+            potential_settlements_coords = game.board.get_potential_settlements(player_perspective)
+            for v_coord in potential_settlements_coords.keys():
+                v_idx = pixel_to_vertex_index_map.get(v_coord)
+                if v_idx is not None: actions["build_settlement"].append(v_idx)
+
+            # Cities
+            potential_cities_coords = game.board.get_potential_cities(player_perspective)
+            for v_coord in potential_cities_coords.keys():
+                v_idx = pixel_to_vertex_index_map.get(v_coord)
+                if v_idx is not None: actions["build_city"].append(v_idx)
+
+            # Roads
+            potential_roads_coords = game.board.get_potential_roads(player_perspective)
+
+        # Common road processing for setup road and main game roads
+        if not (self.game_phase == "setup" and not setup_road_pending): # if not setup settlement phase
+            for r_coords_tuple in potential_roads_coords.keys():
+                v1_coord, v2_coord = r_coords_tuple
+                v1_idx = pixel_to_vertex_index_map.get(v1_coord)
+                v2_idx = pixel_to_vertex_index_map.get(v2_coord)
+                if v1_idx is not None and v2_idx is not None:
+                    # For setup road, ensure it connects to last_settlement_idx
+                    if setup_road_pending:
+                        if v1_idx == last_settlement_idx or v2_idx == last_settlement_idx:
+                             actions["build_road"].append(tuple(sorted((v1_idx, v2_idx))))
+                    else: # Main game phase roads
+                        actions["build_road"].append(tuple(sorted((v1_idx, v2_idx))))
+
+        # Remove duplicates just in case, and sort for consistency
+        actions["build_settlement"] = sorted(list(set(actions["build_settlement"])))
+        actions["build_city"] = sorted(list(set(actions["build_city"])))
+        actions["build_road"] = sorted(list(set(actions["build_road"])))
+
+        return actions
 
     def get_board_state(self, board_obj):
         hexes = []
