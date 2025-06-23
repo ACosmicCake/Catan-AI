@@ -134,13 +134,13 @@ class catanAIGame():
                     if v_idx is not None:
                         v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
                         if v_coord and not self.board.boardGraph[v_coord].isColonised:
-                                player_i.build_settlement(v_coord, self.board) # player.build_settlement should ideally return success/failure
+                            player_i.build_settlement(v_coord, self.board) # player.build_settlement should ideally return success/failure
                             print(f"{player_i.name} built initial settlement at {v_idx}.")
-                                player_i.last_placed_settlement_v_idx = v_idx # Store for road prompt
+                            player_i.last_placed_settlement_v_idx = v_idx # Store for road prompt
                         else:
                             print(f"{player_i.name} failed initial settlement at {v_idx} (invalid/occupied). Placing randomly.")
                             self.execute_random_setup_settlement(player_i)
-                                player_i.last_placed_settlement_v_idx = None # Clear if failed
+                            player_i.last_placed_settlement_v_idx = None # Clear if failed
                     else:
                         print(f"{player_i.name} did not provide valid settlement. Placing randomly.")
                         self.execute_random_setup_settlement(player_i)
