@@ -26,6 +26,7 @@ class LLMPlayer(player):
         possible_actions = "Your possible actions are: build_road, build_settlement, build_city, buy_development_card, trade_with_bank, end_turn."
         example_actions = [
             {"thoughts": "I should build a road to expand.", "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}},
+            {"thoughts": "I want to build a settlement at vertex 5.", "action": {"type": "build_settlement", "vertex_index": 5}},
             {"thoughts": "I will end my turn.", "action": {"type": "end_turn"}}
         ]
 
@@ -136,11 +137,12 @@ Ensure your entire response is a single valid JSON object.
                                                 "type": "object",
                                                 "properties": {
                                                     "type": {"type": "string"},
-                                                    "v1_index": {"type": "integer"},
-                                                    "v2_index": {"type": "integer"},
-                                                    "hex_index": {"type": "integer"},
-                                                    "player_to_rob_name": {"type": "string"},
-                                                    "resources": {
+                                                    "v1_index": {"type": "integer"}, # For roads
+                                                    "v2_index": {"type": "integer"}, # For roads
+                                                    "vertex_index": {"type": "integer"}, # For settlements/cities
+                                                    "hex_index": {"type": "integer"}, # For robber
+                                                    "player_to_rob_name": {"type": "string"}, # For robber
+                                                    "resources": { # For discarding or trading
                                                         "type": "object",
                                                         "properties": {
                                                             "WOOD": {"type": "integer"},
@@ -149,7 +151,9 @@ Ensure your entire response is a single valid JSON object.
                                                             "WHEAT": {"type": "integer"},
                                                             "ORE": {"type": "integer"}
                                                         }
-                                                    } # Assuming resources is a dictionary with known resource types
+                                                    },
+                                                    "resource_to_give": {"type": "string"}, # For bank trade
+                                                    "resource_to_receive": {"type": "string"} # For bank trade
                                                 },
                                                 "required": ["type"]
                                             }
