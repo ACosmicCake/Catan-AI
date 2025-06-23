@@ -255,10 +255,10 @@ class catanAIGame():
                                 else: # Should not happen if resources are not an issue in setup and road is valid
                                     last_r_status = "internal_error"
                                     last_r_error = "player.build_road returned False for setup road unexpectedly."
-                                else:
+                            else:
                                 last_r_status = "invalid_placement"
                                 last_r_error = f"Road {chosen_road_pair} is not a valid setup road. Valid are: {current_model_state_road.available_actions.get('build_road', [])}"
-                            else:
+                        else:
                             last_r_status = "invalid_action_type_or_format"
                             last_r_error = f"Expected 'build_road' action with 'v1_index' and 'v2_index'. Got: {action_road}"
 
