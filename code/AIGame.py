@@ -185,60 +185,31 @@ class catanAIGame():
                 pygame.time.delay(500)
 
                 # --- LLM places first road ---
-                if placed_settlement_v_idx is not None: # Only proceed if settlement was placed
+                if placed_settlement_v_idx is not None: # Only proceed if settlement was placed successfully
                     print(f"{player_i.name} to place first road connected to settlement at {placed_settlement_v_idx}.")
-                # Get the vertex index of the settlement just built (already stored in player_i.last_placed_settlement_v_idx)
-                last_settlement_pixel_coord = player_i.buildGraph['SETTLEMENTS'][-1]
-                # Convert pixel coord to vertex index (this might need a reverse lookup dict in board.py or a method)
-                # For now, assuming board.get_vertex_index_from_pixel(coord) exists or can be added
-                # Or, we can pass the v_idx from the settlement placement directly.
-                # Let's assume we got last_built_settlement_v_idx from the settlement phase.
-                # This part needs careful handling of how v_idx is retrieved/passed.
-                # For now, we'll rely on modelState to get it if we pass it during its creation.
-                # The 'last_settlement_vertex_index' will be set in modelState in step 4.
 
-                road_placement_attempts = 0
-                road_placed_successfully = False
-                max_road_placement_attempts = 2 # Allow one re-prompt
+                    # The following line caused the error if player_i.buildGraph['SETTLEMENTS'] was empty.
+                    # last_settlement_pixel_coord = player_i.buildGraph['SETTLEMENTS'][-1]
+                    # This coord is not strictly needed if we rely on placed_settlement_v_idx for modelState.
 
-                while not road_placed_successfully and road_placement_attempts < max_road_placement_attempts:
-                    road_placement_attempts += 1
-                    if road_placement_attempts > 1:
-                        print(f"Re-prompting {player_i.name} for road placement (attempt {road_placement_attempts}).")
-
-                    # modelState will now need 'setup_road_placement_pending' and 'last_settlement_vertex_index'
-                    # These will be added in the modelState.py modification step.
-                    # We need the v_idx of the settlement. We'll assume it's stored/retrieved correctly by modelState construction.
-                    # This relies on player_i.latest_settlement_v_idx being set after settlement build, or passed to modelState
-
-                    # Find the vertex_index of the last settlement:
-                    # This is a bit convoluted. player.build_settlement stores pixel coords.
-                    # We need the vertex_index that corresponds to player_i.buildGraph['SETTLEMENTS'][-1]
-                    # This requires a reverse mapping from pixel_coord to vertex_index in the board object or game.
-                    # Let's assume self.board.get_vertex_index_from_coord(pixel_coord) exists for now.
-                    # This is a placeholder until board or game state management is clearer on this.
-                    # For now, we'll assume the 'v_idx' from the successful settlement placement is available
-                    # If not, this part of the logic chain will fail.
-                    # Let's assume 'last_successful_settlement_v_idx' was stored on player_i or self after successful settlement.
-                    # This is a gap to be addressed if not already handled by modelState's access to game.
-
-                    # A simpler way: get the last built settlement's v_idx from the successful settlement action.
-                    # This was 'v_idx' in the settlement part. We need to ensure it's available here.
                     road_placement_attempts = 0
                     road_placed_successfully = False
-                    max_road_placement_attempts = 3
-                    last_r_status, last_r_error = None, None
+                    # max_road_placement_attempts = 2 # Allow one re-prompt (original value)
+                    max_road_placement_attempts = 3 # Increased to align with settlement attempts, as per example in prompt
+
+                    last_r_status, last_r_error = None, None # Initialize before loop
 
                     while not road_placed_successfully and road_placement_attempts < max_road_placement_attempts:
                         road_placement_attempts += 1
-                        if road_placement_attempts > 1: print(f"Re-prompting {player_i.name} for road (attempt {road_placement_attempts})")
+                        if road_placement_attempts > 1:
+                            print(f"Re-prompting {player_i.name} for road placement (attempt {road_placement_attempts}).")
 
                         current_model_state_road = modelState(self, player_i,
                                                               setup_road_placement_pending=True,
                                                               last_settlement_vertex_index=placed_settlement_v_idx, # Use the v_idx from successful settlement
                                                               last_action_status=last_r_status,
                                                               last_action_error_details=last_r_error)
-                        last_r_status, last_r_error = None, None # Reset
+                        last_r_status, last_r_error = None, None # Reset for next potential error
 
                         action_road = player_i.get_llm_move(current_model_state_road)
                         print(f"{player_i.name} (Thoughts for road: {player_i.thoughts}) -> Action: {action_road}")
@@ -270,7 +241,9 @@ class catanAIGame():
 
                     if not road_placed_successfully:
                         print(f"CRITICAL: {player_i.name} failed to place first road after {max_road_placement_attempts} attempts.")
-                        # No random fallback. Game might be in inconsistent state.
+                        # No random fallback. Game might be in inconsistent state if road is not placed.
+                # else: # This 'else' corresponds to 'if placed_settlement_v_idx is not None'
+                    # print(f"{player_i.name} did not place a settlement, so no road will be placed.") # Optional: for debugging
 
             elif isinstance(player_i, heuristicAIPlayer): # Heuristic AI setup
                 print(f"{player_i.name} (Heuristic AI) performing initial setup (1st round).")
@@ -339,23 +312,24 @@ class catanAIGame():
                 pygame.time.delay(500)
 
                 # --- LLM places second road ---
-                if placed_settlement_v_idx is not None:
+                if placed_settlement_v_idx is not None: # Only proceed if settlement was placed successfully
                     print(f"{player_i.name} to place second road connected to settlement at {placed_settlement_v_idx}.")
                     road_placement_attempts = 0
                     road_placed_successfully = False
                     max_road_placement_attempts = 3
-                    last_r_status, last_r_error = None, None
+                    last_r_status, last_r_error = None, None # Initialize before loop
 
                     while not road_placed_successfully and road_placement_attempts < max_road_placement_attempts:
                         road_placement_attempts += 1
-                        if road_placement_attempts > 1: print(f"Re-prompting {player_i.name} for 2nd road (attempt {road_placement_attempts})")
+                        if road_placement_attempts > 1:
+                            print(f"Re-prompting {player_i.name} for 2nd road (attempt {road_placement_attempts})")
 
                         current_model_state_road = modelState(self, player_i,
                                                               setup_road_placement_pending=True,
                                                               last_settlement_vertex_index=placed_settlement_v_idx,
                                                               last_action_status=last_r_status,
                                                               last_action_error_details=last_r_error)
-                        last_r_status, last_r_error = None, None
+                        last_r_status, last_r_error = None, None # Reset for next potential error
 
                         action_road = player_i.get_llm_move(current_model_state_road)
                         print(f"{player_i.name} (Thoughts for 2nd road: {player_i.thoughts}) -> Action: {action_road}")
@@ -386,6 +360,8 @@ class catanAIGame():
 
                     if not road_placed_successfully:
                         print(f"CRITICAL: {player_i.name} failed to place 2nd road after {max_road_placement_attempts} attempts.")
+                # else: # Corresponds to 'if placed_settlement_v_idx is not None'
+                    # print(f"{player_i.name} did not place second settlement, so no second road will be placed.") # Optional
 
             elif isinstance(player_i, heuristicAIPlayer): # Heuristic AI setup
                 print(f"{player_i.name} (Heuristic AI) performing initial setup (2nd round).")
