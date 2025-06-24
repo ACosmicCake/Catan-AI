@@ -11,6 +11,8 @@ class LLMPlayer(player):
         self.llm_type = llm_type
         self.thoughts = ""
         self.gemini_client = None # Changed from self.gemini_model
+        self.feedback_status_for_next_state = None
+        self.feedback_details_for_next_state = None
 
     def _strip_markdown_json(self, text_response):
         # Check if the response is wrapped in markdown JSON backticks
@@ -83,74 +85,99 @@ class LLMPlayer(player):
                 instructions = "A 7 was rolled and you MUST move the robber. This is your only action for this specific decision."
                 possible_actions = "Your ONLY action for this decision must be: move_robber. Consult 'available_actions' in the game state for valid hex indices to move the robber to (generally any hex not currently occupied by the robber)."
             example_actions = [
-                {"thoughts": "I need to move the robber. I'll choose hex 10 and target Player X if available.", "action": {"type": "move_robber", "hex_index": 10, "player_to_rob_name": "PlayerX_Name_Or_Null"}}
+                {"thoughts": "I need to move the robber. I'll choose hex 10 and target Player X if available.", "long_term_plan": "Disrupt Player X's resource income.", "action": {"type": "move_robber", "hex_index": 10, "player_to_rob_name": "PlayerX_Name_Or_Null"}}
             ]
         elif hasattr(game_state_obj, 'discard_is_mandatory') and game_state_obj.discard_is_mandatory:
             num_to_discard = game_state_obj.num_cards_to_discard
             instructions = f"You rolled a 7 and have too many cards. You MUST discard {num_to_discard} resource cards in total. This is your only action for this specific decision."
             possible_actions = "Your ONLY action for this decision must be: discard_cards. Provide the resources to discard in a dictionary format, ensuring the sum of values equals the required discard number."
 
-            # Construct a simple, generic example for the discard action's structure
             example_resource_breakdown = {}
-            if num_to_discard == 1:
-                example_resource_breakdown = {"WOOD": 1} # Or any single resource type
-            elif num_to_discard == 2:
-                example_resource_breakdown = {"WOOD": 1, "SHEEP": 1}
-            elif num_to_discard > 2:
-                # Example: discard 1 of two types, and the rest of a third, or similar simple structure
+            if num_to_discard == 1: example_resource_breakdown = {"WOOD": 1}
+            elif num_to_discard == 2: example_resource_breakdown = {"WOOD": 1, "SHEEP": 1}
+            else:
                 example_resource_breakdown = {"WOOD": 1, "SHEEP": 1, "BRICK": num_to_discard - 2}
-                if num_to_discard - 2 <= 0: # handles num_to_discard = 2 already covered, but as safeguard
-                    example_resource_breakdown = {"WOOD": num_to_discard // 2, "SHEEP": num_to_discard - (num_to_discard // 2)}
+                if num_to_discard - 2 <= 0: example_resource_breakdown = {"WOOD": num_to_discard // 2, "SHEEP": num_to_discard - (num_to_discard // 2)}
 
             example_actions = [
-                {"thoughts": f"I must discard {num_to_discard} cards. I will choose from the resources I currently possess (e.g., WOOD, SHEEP, BRICK), making sure the total number of cards discarded is exactly {num_to_discard}. The specific resources I choose will depend on what I have and my strategy.",
-                 "action": {"type": "discard_cards", "resources": example_resource_breakdown }}
+                {"thoughts": f"I must discard {num_to_discard} cards. I will choose from what I have to keep my options open.", "long_term_plan": "Minimize loss of valuable resources for city building.", "action": {"type": "discard_cards", "resources": example_resource_breakdown }}
             ]
 
         elif hasattr(game_state_obj, 'trade_offer_pending') and game_state_obj.trade_offer_pending:
             offering_player = game_state_obj.trade_offering_player_name
             offered_res = game_state_obj.trade_resources_offered_to_you
             requested_res = game_state_obj.trade_resources_requested_from_you
-            instructions = (f"Player {offering_player} has proposed a trade with you. "
-                            f"They are offering you: {json.dumps(offered_res)}. "
-                            f"They are requesting from you: {json.dumps(requested_res)}. "
-                            "You must decide to 'accept_trade' or 'reject_trade'. This is your only action for this decision.")
-            possible_actions = "Your ONLY actions for this decision are: accept_trade, reject_trade."
+            instructions = (f"Player {offering_player} has proposed a trade. Offering: {json.dumps(offered_res)}. Requesting: {json.dumps(requested_res)}. You must 'accept_trade' or 'reject_trade'.")
+            possible_actions = "Your ONLY actions are: accept_trade, reject_trade."
             example_actions = [
-                {"thoughts": "This trade benefits me, I have the resources they want and need what they offer.", "action": {"type": "accept_trade"}},
-                {"thoughts": "This trade is not good for me.", "action": {"type": "reject_trade"}}
+                {"thoughts": "This trade helps me build a city sooner.", "long_term_plan": "Get resources for a city.", "action": {"type": "accept_trade"}},
+                {"thoughts": "This trade is not good for me long term.", "long_term_plan": "Conserve my current resources for a settlement.", "action": {"type": "reject_trade"}}
             ]
 
         elif hasattr(game_state_obj, 'setup_road_placement_pending') and game_state_obj.setup_road_placement_pending and hasattr(game_state_obj, 'last_settlement_vertex_index'):
             last_settlement_v_idx = game_state_obj.last_settlement_vertex_index
-            instructions = f"You have just placed a settlement at vertex {last_settlement_v_idx}. You MUST now build a road connected to this new settlement. This is your only action."
-            possible_actions = "Your ONLY action for this decision must be: build_road."
-            # Find a valid neighbor for the example. This is tricky without full board access here.
-            # We'll use a placeholder. The LLM should use available_road_locations from game_state.
+            instructions = f"You placed a settlement at vertex {last_settlement_v_idx}. You MUST now build a road connected to it."
+            possible_actions = "Your ONLY action must be: build_road."
             example_v2_idx = "any_valid_neighbor_of_" + str(last_settlement_v_idx)
-            # Try to get a valid neighbor from available_road_locations if present in game_state_obj
-            if hasattr(game_state_obj, 'available_actions') and 'build_road' in game_state_obj.available_actions:
-                if game_state_obj.available_actions['build_road']: # Check if list is not empty
-                    # Assuming available_actions['build_road'] is a list of tuples like [(v1,v2), ...]
-                    # And we need to find one where v1 or v2 is last_settlement_v_idx
-                    for r_v1, r_v2 in game_state_obj.available_actions['build_road']:
-                        if r_v1 == last_settlement_v_idx:
-                            example_v2_idx = r_v2
-                            break
-                        elif r_v2 == last_settlement_v_idx:
-                            # Ensure the example uses last_settlement_v_idx as v1_index if it's not already
-                            # This is just for consistency in the example.
-                            example_v2_idx = r_v1 # The other end of the road
-                            break
+            if hasattr(game_state_obj, 'available_actions') and game_state_obj.available_actions.get('build_road'):
+                for r_v1, r_v2 in game_state_obj.available_actions['build_road']:
+                    if r_v1 == last_settlement_v_idx: example_v2_idx = r_v2; break
+                    elif r_v2 == last_settlement_v_idx: example_v2_idx = r_v1; break
             example_actions = [
-                {"thoughts": f"I just built a settlement at vertex {last_settlement_v_idx}. Now I must build an adjacent road. I will connect it to vertex {example_v2_idx}.", "action": {"type": "build_road", "v1_index": last_settlement_v_idx, "v2_index": example_v2_idx}}
+                {"thoughts": f"Must build a road from {last_settlement_v_idx}. I'll connect to {example_v2_idx}.", "long_term_plan": "Expand towards the best available hexes.", "action": {"type": "build_road", "v1_index": last_settlement_v_idx, "v2_index": example_v2_idx}}
             ]
+
+        # Update general examples if not already covered by specific mandatory actions
+        elif not (hasattr(game_state_obj, 'private_chat_active') and game_state_obj.private_chat_active) and \
+             not (hasattr(game_state_obj, 'communication_phase_active') and game_state_obj.communication_phase_active):
+            # This is for the general case of a normal turn
+            example_actions = [
+                {"thoughts": "I should build a road to expand my network.", "long_term_plan": "Reach the 6-ore hex and then build a settlement.", "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}},
+                {"thoughts": "I want to build a settlement at vertex 5, it has good resource diversity.", "long_term_plan": "Secure wood and brick income, then get a port.", "action": {"type": "build_settlement", "vertex_index": 5}},
+                {"thoughts": "I want to discuss a trade for ORE with Player2-AI-Name.", "long_term_plan": "Negotiate a favorable trade to get resources for a city.", "action": {"type": "initiate_private_chat", "recipient_name": "Player2-AI-Name", "opening_message": "Hey, I'm interested in your ORE. What would you want for it?"}},
+                {"thoughts": "I want to make a public statement about needing WHEAT.", "long_term_plan": "Signal my resource needs to facilitate trades.", "action": {"type": "send_global_message", "message": "I am looking for WHEAT, willing to trade ORE."}},
+                {"thoughts": "I will end my turn as I cannot make any more beneficial moves.", "long_term_plan": "Save resources for a city next turn.", "action": {"type": "end_turn"}}
+            ]
+            # If in private chat or communication phase, their specific examples are already set.
+            # We need to ensure those examples also get the 'long_term_plan' field if it's globally expected.
+
+        # Ensure all example_actions (even those for specific phases like private chat) include 'long_term_plan'
+        # This might be slightly redundant if some phases don't naturally have a "long term plan" (e.g. simple accept/reject)
+        # but for consistency in the expected JSON output, it's safer to include it.
+        # A generic plan can be "Resolve current interaction effectively."
+        updated_example_actions = []
+        for ex_action in example_actions:
+            if "long_term_plan" not in ex_action:
+                # Add a generic long_term_plan if missing, specific to the context if possible
+                if hasattr(game_state_obj, 'private_chat_active') and game_state_obj.private_chat_active:
+                     ex_action["long_term_plan"] = "Successfully negotiate or conclude this private chat."
+                elif hasattr(game_state_obj, 'communication_phase_active') and game_state_obj.communication_phase_active:
+                     ex_action["long_term_plan"] = "Effectively communicate my intentions or gather information."
+                else:
+                     ex_action["long_term_plan"] = "Advance my position towards winning the game." # Generic fallback
+            updated_example_actions.append(ex_action)
+        example_actions = updated_example_actions
 
 
         # Construct example string
         example_str = "For example: " + json.dumps(example_actions[0])
-        if len(example_actions) > 1:
-            example_str += "\nAnother example: " + json.dumps(example_actions[1])
+        if len(example_actions) > 1: # Ensure there's a second example to show
+            # Attempt to pick a different example if possible, or just the next one.
+            # This logic needs to be careful if example_actions has only one item after specific phase filtering.
+            # The goal is to ensure the prompt shows diverse examples.
+            # The previous logic selected example_actions[0] and example_actions[1] from potentially different lists.
+            # Now, example_actions should be the final list of examples for the current context.
+            if len(example_actions) > 1:
+                 example_str += "\nAnother example: " + json.dumps(example_actions[1])
+            elif len(example_actions) == 1 and game_state_obj.game_phase == "main" and not (hasattr(game_state_obj, 'private_chat_active') and game_state_obj.private_chat_active) and not (hasattr(game_state_obj, 'communication_phase_active') and game_state_obj.communication_phase_active) and not (hasattr(game_state_obj, 'robber_movement_is_mandatory') and game_state_obj.robber_movement_is_mandatory) and not (hasattr(game_state_obj, 'discard_is_mandatory') and game_state_obj.discard_is_mandatory) and not (hasattr(game_state_obj, 'trade_offer_pending') and game_state_obj.trade_offer_pending) and not (hasattr(game_state_obj, 'setup_road_placement_pending') and game_state_obj.setup_road_placement_pending):
+                # If it's a general turn and we only have one example (e.g. end_turn was the only one constructed),
+                # try to add a more complex one like build_road for better illustration.
+                # This is a bit of a patch to make the general prompt more illustrative.
+                # This specific example needs to be crafted carefully.
+                generic_build_example = {"thoughts": "I should build a road to expand.", "long_term_plan": "Reach a good hex.", "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}}
+                if example_actions[0]['action']['type'] != "build_road": # Avoid duplicate example types
+                    example_str += "\nAnother example: " + json.dumps(generic_build_example)
+
 
 
         return f"""
@@ -162,7 +189,8 @@ You are an expert Settlers of Catan player. Here is the current game state:
 Refer to the 'available_actions' section within the game state JSON to see currently valid locations for building (if applicable to current phase).
 The 'action_costs' section lists the resource costs for standard building actions (if applicable).
 The 'current_player_bank_trade_ratios' section details your current exchange rates with the bank, including any port benefits. Use this when considering a 'trade_with_bank' action (if applicable).
-Provide your reasoning in a 'thoughts' field and the chosen action in an 'action' field in JSON format.
+Provide your reasoning in a 'thoughts' field, your strategic goals for the next 2-3 turns in a 'long_term_plan' field (e.g., 'Secure ore access, build a city, then aim for longest road'), and the chosen action in an 'action' field in JSON format.
+When communicating (global or private chat), you must base any statement about your resources or game state strictly on the information provided in the JSON. Do not hallucinate or misrepresent your hand.
 {example_str}
 Ensure your entire response is a single valid JSON object.
 """
@@ -255,6 +283,7 @@ Ensure your entire response is a single valid JSON object.
                                         "type": "object",
                                         "properties": {
                                             "thoughts": {"type": "string"},
+                                            "long_term_plan": {"type": "string"},
                                             "action": {
                                                 "type": "object",
                                                 "properties": {
@@ -306,7 +335,7 @@ Ensure your entire response is a single valid JSON object.
                                                 "required": ["type"]
                                             }
                                         },
-                                        "required": ["thoughts", "action"]
+                                        "required": ["thoughts", "long_term_plan", "action"]
                                     }
                                 } # Contents should be a list
                             )

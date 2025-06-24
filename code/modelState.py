@@ -4,6 +4,23 @@ import numpy as np # Added import
 # from board import catanBoard # Assuming catanBoard is in board.py
 # from player import player # Assuming player is in player.py
 
+# Probabilities represented as "dots" similar to game pieces (max 5 dots for 6 & 8)
+# 7 is not a resource-producing roll.
+DICE_ROLL_PROBABILITIES = {
+    2: 1,  # (1/36)
+    3: 2,  # (2/36)
+    4: 3,  # (3/36)
+    5: 4,  # (4/36)
+    6: 5,  # (5/36)
+    8: 5,  # (5/36)
+    9: 4,  # (4/36)
+    10: 3, # (3/36)
+    11: 2, # (2/36)
+    12: 1, # (1/36)
+    0: 0,  # For Desert (roll_number is 0 or None)
+    None: 0
+}
+
 class modelState():
     def __init__(self, catan_game, current_player,
                  robber_movement_is_mandatory=False,
@@ -22,6 +39,19 @@ class modelState():
         self.board = self.get_board_state(catan_game.board)
         self.players = self.get_players_state(catan_game.playerQueue.queue, current_player, catan_game.board)
         self.current_player_name = current_player.name
+        self.development_cards_left_in_deck = len(catan_game.board.devCardStack) if hasattr(catan_game, 'board') and hasattr(catan_game.board, 'devCardStack') else 0
+
+        # Pick up feedback from player object if available (set by AIGame.py after an action)
+        # These are read before other state construction that might depend on them (like available_actions if feedback was about a failed build)
+        self.last_action_status = getattr(current_player, 'feedback_status_for_next_state', None)
+        self.last_action_error_details = getattr(current_player, 'feedback_details_for_next_state', None)
+
+        # Important: Clear them from the player object after reading, so they are not stale for the next unrelated state.
+        # This ensures feedback is for the immediately following state generation.
+        if hasattr(current_player, 'feedback_status_for_next_state'):
+            current_player.feedback_status_for_next_state = None
+        if hasattr(current_player, 'feedback_details_for_next_state'):
+            current_player.feedback_details_for_next_state = None
 
         # Chat histories and phases
         self.global_chat_history = catan_game.global_chat_history[-10:] # Include last 10 global messages
@@ -184,6 +214,7 @@ class modelState():
                 "hex_index": hex_tile.index,
                 "resource_type": hex_tile.resource.type if hex_tile.resource else "NONE", # Desert has no resource type
                 "roll_number": hex_tile.resource.num if hex_tile.resource and hex_tile.resource.num is not None else 0, # Desert roll num is None
+                "probability_dots": DICE_ROLL_PROBABILITIES.get(hex_tile.resource.num if hex_tile.resource else 0, 0)
             })
             if hex_tile.robber:
                 robber_location_hex_index = hex_tile.index
@@ -248,8 +279,41 @@ class modelState():
                 "knights_played": p.knightsPlayed,
                 "largest_army": p.largestArmyFlag,
                 "longest_road": p.longestRoadFlag,
-                "is_current_player": p.name == current_player.name
+                "is_current_player": p.name == current_player.name,
+                "threat_score": 0 # Will be calculated below
             })
+
+        # Calculate threat scores
+        for player_state in player_states:
+            # Find the corresponding player object 'p' to get resource and dev card counts
+            # This is a bit inefficient but necessary if these counts aren't already in player_state
+            # For simplicity, I'll assume 'p' from the loop above is still in scope or re-fetch.
+            # Better: ensure all needed info is on 'p' when iterating 'players_queue'
+
+            # Re-iterate to find the original player object 'p' for detailed card counts for threat score
+            # This assumes player_states is in the same order as players_queue or names are unique and mapable.
+            # Given player_states is sorted by name, and players_queue might not be, direct indexing is risky.
+            # Let's find the player 'p' again by name from the original queue for accurate card counts.
+            original_player_object = next((player_obj for player_obj in list(players_queue) if player_obj.name == player_state["name"]), None)
+
+            if original_player_object:
+                vp = player_state["victory_points"]
+                knights = player_state["knights_played"]
+
+                # Number of resource cards
+                num_resource_cards = sum(original_player_object.resources.values())
+
+                # Number of hidden development cards (sum of values in the devCards dictionary)
+                num_dev_cards_unplayed = sum(original_player_object.devCards.values()) if hasattr(original_player_object, 'devCards') and isinstance(original_player_object.devCards, dict) else 0
+
+                # Calculate threat score: (VP * 3) + (Knights Played * 1) + (Total Cards * 0.5)
+                # We use visible VP for threat calculation.
+                threat = (vp * 3) + (knights * 1) + ((num_resource_cards + num_dev_cards_unplayed) * 0.5)
+                player_state["threat_score"] = round(threat, 1)
+            else:
+                # Fallback if original player object not found, though this shouldn't happen.
+                player_state["threat_score"] = player_state["victory_points"] * 3 # Simplified fallback
+
         return sorted(player_states, key=lambda ps: ps["name"]) # Sort for consistency
 
     def _json_serializer(self, obj):

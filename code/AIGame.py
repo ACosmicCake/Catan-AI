@@ -134,17 +134,19 @@ class catanAIGame():
                 settlement_placed_successfully = False
                 settlement_placement_attempts = 0
                 max_settlement_placement_attempts = 3
-                last_s_status, last_s_error = None, None
+                # last_s_status, last_s_error removed, will use player_i attributes
                 placed_settlement_v_idx = None
 
                 while not settlement_placed_successfully and settlement_placement_attempts < max_settlement_placement_attempts:
                     settlement_placement_attempts += 1
-                    if settlement_placement_attempts > 1: print(f"Re-prompting {player_i.name} for settlement (attempt {settlement_placement_attempts})")
+                    if settlement_placement_attempts > 1:
+                        print(f"Re-prompting {player_i.name} for settlement (attempt {settlement_placement_attempts})")
+                        # Ensure feedback is set on player_i for the modelState to pick up
+                        # player_i.feedback_status_for_next_state = last_s_status_for_retry
+                        # player_i.feedback_details_for_next_state = last_s_error_for_retry
+                        # These last_s_status_for_retry would be set in the else clauses below.
 
-                    current_model_state_settlement = modelState(self, player_i,
-                                                                last_action_status=last_s_status,
-                                                                last_action_error_details=last_s_error)
-                    last_s_status, last_s_error = None, None # Reset for next potential error
+                    current_model_state_settlement = modelState(self, player_i) # Will pick up feedback from player_i
 
                     action_settlement = player_i.get_llm_move(current_model_state_settlement)
                     print(f"{player_i.name} (Thoughts for settlement: {player_i.thoughts}) -> Action: {action_settlement}")
@@ -169,15 +171,19 @@ class catanAIGame():
                             player_i.last_placed_settlement_v_idx = v_idx # Store for road prompt
                             placed_settlement_v_idx = v_idx
                             settlement_placed_successfully = True
+                            player_i.feedback_status_for_next_state = "success" # For the next action (road placement)
+                            player_i.feedback_details_for_next_state = f"Successfully placed settlement at {v_idx}."
                         else:
-                            last_s_status = "invalid_placement"
-                            last_s_error = f"Vertex {v_idx} is not a valid setup settlement location (e.g. occupied, too close, or rule violation). Valid are: {current_model_state_settlement.available_actions.get('build_settlement', [])}"
+                            player_i.feedback_status_for_next_state = "error_invalid_placement"
+                            player_i.feedback_details_for_next_state = f"Vertex {v_idx} is not a valid setup settlement location (e.g. occupied, too close, or rule violation). Valid are: {current_model_state_settlement.available_actions.get('build_settlement', [])}"
                     else:
-                        last_s_status = "invalid_action_type_or_format"
-                        last_s_error = f"Expected 'build_settlement' action with 'vertex_index'. Got: {action_settlement}"
+                        player_i.feedback_status_for_next_state = "error_invalid_action_type"
+                        player_i.feedback_details_for_next_state = f"Expected 'build_settlement' action with 'vertex_index'. Got: {action_settlement}"
 
                 if not settlement_placed_successfully:
                     print(f"CRITICAL: {player_i.name} failed to place first settlement after {max_settlement_placement_attempts} attempts. Halting setup for this player.")
+                    # Ensure feedback reflects the final failure if loop exhausted
+                    # player_i.feedback_status_for_next_state and player_i.feedback_details_for_next_state will have the last error
                     # In a real game, might need to skip player or exit. For now, we'll just not place the road.
                     player_i.last_placed_settlement_v_idx = None # Ensure it's None
 
@@ -197,19 +203,17 @@ class catanAIGame():
                     # max_road_placement_attempts = 2 # Allow one re-prompt (original value)
                     max_road_placement_attempts = 3 # Increased to align with settlement attempts, as per example in prompt
 
-                    last_r_status, last_r_error = None, None # Initialize before loop
+                    # last_r_status, last_r_error removed, will use player_i attributes
 
                     while not road_placed_successfully and road_placement_attempts < max_road_placement_attempts:
                         road_placement_attempts += 1
                         if road_placement_attempts > 1:
                             print(f"Re-prompting {player_i.name} for road placement (attempt {road_placement_attempts}).")
+                            # Feedback for retry is already on player_i from previous failed attempt in this loop
 
-                        current_model_state_road = modelState(self, player_i,
+                        current_model_state_road = modelState(self, player_i, # Will pick up feedback
                                                               setup_road_placement_pending=True,
-                                                              last_settlement_vertex_index=placed_settlement_v_idx, # Use the v_idx from successful settlement
-                                                              last_action_status=last_r_status,
-                                                              last_action_error_details=last_r_error)
-                        last_r_status, last_r_error = None, None # Reset for next potential error
+                                                              last_settlement_vertex_index=placed_settlement_v_idx)
 
                         action_road = player_i.get_llm_move(current_model_state_road)
                         print(f"{player_i.name} (Thoughts for road: {player_i.thoughts}) -> Action: {action_road}")
@@ -221,29 +225,32 @@ class catanAIGame():
                             chosen_road_pair = tuple(sorted((v1_idx_road, v2_idx_road)))
                             # Validate connection to the new settlement
                             if not (v1_idx_road == placed_settlement_v_idx or v2_idx_road == placed_settlement_v_idx):
-                                last_r_status = "invalid_placement"
-                                last_r_error = f"Road {chosen_road_pair} must connect to the new settlement at vertex {placed_settlement_v_idx}."
+                                player_i.feedback_status_for_next_state = "error_invalid_placement"
+                                player_i.feedback_details_for_next_state = f"Road {chosen_road_pair} must connect to the new settlement at vertex {placed_settlement_v_idx}."
                             elif chosen_road_pair in current_model_state_road.available_actions.get("build_road", []):
                                 v1_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx_road)
                                 v2_coord = self.board.vertex_index_to_pixel_dict.get(v2_idx_road)
                                 if player_i.build_road(v1_coord, v2_coord, self.board, setup_phase=True):
                                     print(f"{player_i.name} built initial road from {v1_idx_road} to {v2_idx_road}.")
                                     road_placed_successfully = True
-                                else: # Should not happen if resources are not an issue in setup and road is valid
-                                    last_r_status = "internal_error"
-                                    last_r_error = "player.build_road returned False for setup road unexpectedly."
+                                    player_i.feedback_status_for_next_state = "success" # For the next player or phase
+                                    player_i.feedback_details_for_next_state = f"Successfully built road {chosen_road_pair}."
+                                else:
+                                    player_i.feedback_status_for_next_state = "error_unknown_build_failure"
+                                    player_i.feedback_details_for_next_state = "player.build_road returned False for setup road unexpectedly. Ensure road rules are met."
                             else:
-                                last_r_status = "invalid_placement"
-                                last_r_error = f"Road {chosen_road_pair} is not a valid setup road. Valid are: {current_model_state_road.available_actions.get('build_road', [])}"
+                                player_i.feedback_status_for_next_state = "error_invalid_placement"
+                                player_i.feedback_details_for_next_state = f"Road {chosen_road_pair} is not a valid setup road. Valid roads are: {current_model_state_road.available_actions.get('build_road', [])}"
                         else:
-                            last_r_status = "invalid_action_type_or_format"
-                            last_r_error = f"Expected 'build_road' action with 'v1_index' and 'v2_index'. Got: {action_road}"
+                            player_i.feedback_status_for_next_state = "error_invalid_action_type"
+                            player_i.feedback_details_for_next_state = f"Expected 'build_road' action with 'v1_index' and 'v2_index'. Got: {action_road}"
 
                     if not road_placed_successfully:
                         print(f"CRITICAL: {player_i.name} failed to place first road after {max_road_placement_attempts} attempts.")
-                        # No random fallback. Game might be in inconsistent state if road is not placed.
-                # else: # This 'else' corresponds to 'if placed_settlement_v_idx is not None'
-                    # print(f"{player_i.name} did not place a settlement, so no road will be placed.") # Optional: for debugging
+                        # player_i feedback will retain the last error message.
+                # else:
+                    # print(f"{player_i.name} did not place a settlement, so no road will be placed.")
+                    # If settlement failed, player_i.feedback... will have that error. If it was successful, it'll have road success/failure.
 
             elif isinstance(player_i, heuristicAIPlayer): # Heuristic AI setup
                 print(f"{player_i.name} (Heuristic AI) performing initial setup (1st round).")
@@ -263,17 +270,16 @@ class catanAIGame():
                 settlement_placed_successfully = False
                 settlement_placement_attempts = 0
                 max_settlement_placement_attempts = 3
-                last_s_status, last_s_error = None, None
+                # last_s_status, last_s_error removed
                 placed_settlement_v_idx = None
 
                 while not settlement_placed_successfully and settlement_placement_attempts < max_settlement_placement_attempts:
                     settlement_placement_attempts += 1
-                    if settlement_placement_attempts > 1: print(f"Re-prompting {player_i.name} for 2nd settlement (attempt {settlement_placement_attempts})")
+                    if settlement_placement_attempts > 1:
+                        print(f"Re-prompting {player_i.name} for 2nd settlement (attempt {settlement_placement_attempts})")
+                        # Feedback for retry is on player_i
 
-                    current_model_state_settlement = modelState(self, player_i,
-                                                                last_action_status=last_s_status,
-                                                                last_action_error_details=last_s_error)
-                    last_s_status, last_s_error = None, None # Reset
+                    current_model_state_settlement = modelState(self, player_i) # Will pick up feedback
 
                     action_settlement = player_i.get_llm_move(current_model_state_settlement)
                     print(f"{player_i.name} (Thoughts for 2nd settlement: {player_i.thoughts}) -> Action: {action_settlement}")
@@ -297,15 +303,18 @@ class catanAIGame():
                             player_i.last_placed_settlement_v_idx = v_idx
                             placed_settlement_v_idx = v_idx
                             settlement_placed_successfully = True
+                            player_i.feedback_status_for_next_state = "success"
+                            player_i.feedback_details_for_next_state = f"Successfully placed 2nd settlement at {v_idx}."
                         else:
-                            last_s_status = "invalid_placement"
-                            last_s_error = f"Vertex {v_idx} is not a valid setup settlement location. Valid are: {current_model_state_settlement.available_actions.get('build_settlement', [])}"
+                            player_i.feedback_status_for_next_state = "error_invalid_placement"
+                            player_i.feedback_details_for_next_state = f"Vertex {v_idx} is not a valid setup settlement location for 2nd settlement. Valid are: {current_model_state_settlement.available_actions.get('build_settlement', [])}"
                     else:
-                        last_s_status = "invalid_action_type_or_format"
-                        last_s_error = f"Expected 'build_settlement' action with 'vertex_index'. Got: {action_settlement}"
+                        player_i.feedback_status_for_next_state = "error_invalid_action_type"
+                        player_i.feedback_details_for_next_state = f"Expected 'build_settlement' action with 'vertex_index' for 2nd settlement. Got: {action_settlement}"
 
                 if not settlement_placed_successfully:
                     print(f"CRITICAL: {player_i.name} failed to place 2nd settlement after {max_settlement_placement_attempts} attempts. Halting setup.")
+                    # Feedback on player_i obj will have the last error
                     player_i.last_placed_settlement_v_idx = None
 
                 self.boardView.displayGameScreen()
@@ -317,19 +326,17 @@ class catanAIGame():
                     road_placement_attempts = 0
                     road_placed_successfully = False
                     max_road_placement_attempts = 3
-                    last_r_status, last_r_error = None, None # Initialize before loop
+                    # last_r_status, last_r_error removed
 
                     while not road_placed_successfully and road_placement_attempts < max_road_placement_attempts:
                         road_placement_attempts += 1
                         if road_placement_attempts > 1:
                             print(f"Re-prompting {player_i.name} for 2nd road (attempt {road_placement_attempts})")
+                            # Feedback for retry is on player_i
 
-                        current_model_state_road = modelState(self, player_i,
+                        current_model_state_road = modelState(self, player_i, # Will pick up feedback
                                                               setup_road_placement_pending=True,
-                                                              last_settlement_vertex_index=placed_settlement_v_idx,
-                                                              last_action_status=last_r_status,
-                                                              last_action_error_details=last_r_error)
-                        last_r_status, last_r_error = None, None # Reset for next potential error
+                                                              last_settlement_vertex_index=placed_settlement_v_idx)
 
                         action_road = player_i.get_llm_move(current_model_state_road)
                         print(f"{player_i.name} (Thoughts for 2nd road: {player_i.thoughts}) -> Action: {action_road}")
@@ -340,28 +347,31 @@ class catanAIGame():
                         if action_type_road == "build_road" and v1_idx_road is not None and v2_idx_road is not None:
                             chosen_road_pair = tuple(sorted((v1_idx_road, v2_idx_road)))
                             if not (v1_idx_road == placed_settlement_v_idx or v2_idx_road == placed_settlement_v_idx):
-                                last_r_status = "invalid_placement"
-                                last_r_error = f"Road {chosen_road_pair} must connect to the new settlement at vertex {placed_settlement_v_idx}."
+                                player_i.feedback_status_for_next_state = "error_invalid_placement"
+                                player_i.feedback_details_for_next_state = f"Road {chosen_road_pair} for 2nd settlement must connect to it at vertex {placed_settlement_v_idx}."
                             elif chosen_road_pair in current_model_state_road.available_actions.get("build_road", []):
                                 v1_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx_road)
                                 v2_coord = self.board.vertex_index_to_pixel_dict.get(v2_idx_road)
                                 if player_i.build_road(v1_coord, v2_coord, self.board, setup_phase=True):
                                     print(f"{player_i.name} built 2nd initial road from {v1_idx_road} to {v2_idx_road}.")
                                     road_placed_successfully = True
+                                    player_i.feedback_status_for_next_state = "success"
+                                    player_i.feedback_details_for_next_state = f"Successfully built 2nd road {chosen_road_pair}."
                                 else:
-                                    last_r_status = "internal_error"
-                                    last_r_error = "player.build_road returned False for 2nd setup road unexpectedly."
+                                    player_i.feedback_status_for_next_state = "error_unknown_build_failure"
+                                    player_i.feedback_details_for_next_state = "player.build_road returned False for 2nd setup road unexpectedly. Ensure road rules are met."
                             else:
-                                last_r_status = "invalid_placement"
-                                last_r_error = f"Road {chosen_road_pair} is not a valid 2nd setup road. Valid are: {current_model_state_road.available_actions.get('build_road', [])}"
+                                player_i.feedback_status_for_next_state = "error_invalid_placement"
+                                player_i.feedback_details_for_next_state = f"Road {chosen_road_pair} is not a valid 2nd setup road. Valid roads are: {current_model_state_road.available_actions.get('build_road', [])}"
                         else:
-                            last_r_status = "invalid_action_type_or_format"
-                            last_r_error = f"Expected 'build_road' action with 'v1_index' and 'v2_index'. Got: {action_road}"
+                            player_i.feedback_status_for_next_state = "error_invalid_action_type"
+                            player_i.feedback_details_for_next_state = f"Expected 'build_road' action with 'v1_index' and 'v2_index' for 2nd road. Got: {action_road}"
 
                     if not road_placed_successfully:
                         print(f"CRITICAL: {player_i.name} failed to place 2nd road after {max_road_placement_attempts} attempts.")
-                # else: # Corresponds to 'if placed_settlement_v_idx is not None'
-                    # print(f"{player_i.name} did not place second settlement, so no second road will be placed.") # Optional
+                        # player_i feedback will have the last error.
+                # else:
+                    # print(f"{player_i.name} did not place second settlement, so no second road will be placed.")
 
             elif isinstance(player_i, heuristicAIPlayer): # Heuristic AI setup
                 print(f"{player_i.name} (Heuristic AI) performing initial setup (2nd round).")
@@ -747,6 +757,10 @@ class catanAIGame():
                 currPlayer.updateDevCards()
                 currPlayer.devCardPlayedThisTurn = False
 
+                # Initialize feedback for the current player's turn
+                current_turn_last_action_status = None
+                current_turn_last_action_error_details = None
+
                 pygame.event.pump()
                 diceNum = self.rollDice()
                 # update_playerResources now sets pending_discard_count on players and player_to_move_robber on self
@@ -832,12 +846,18 @@ class catanAIGame():
                 if isinstance(currPlayer, LLMPlayer):
                     # ... (LLM main turn action logic as before) ...
                     print(f"{currPlayer.name} taking main turn actions...")
-                    # Create modelState without private_chat_active=True for normal turn actions
+
+                    # Create modelState for the main turn. It will pick up any feedback from a *previous*
+                    # mandatory action (like discard/robber) within THIS turn, or from the player's PREVIOUS turn.
+                    # modelState itself will clear the feedback from currPlayer after reading it.
                     state_for_main_turn = modelState(self, currPlayer, private_chat_active=False, communication_phase_active=False)
                     action = currPlayer.get_llm_move(state_for_main_turn)
                     print(f"{currPlayer.name} (Main Turn Thoughts: {currPlayer.thoughts}) -> Action: {action}")
 
                     action_type = action.get("type")
+                    # Default feedback if action is not successfully processed or is an 'end_turn'
+                    current_turn_last_action_status = "no_action_taken"
+                    current_turn_last_action_error_details = "Player chose to end turn or action was not processed."
 
                     # Handle global message during main turn if chosen
                     if action_type == "send_global_message":
@@ -877,93 +897,247 @@ class catanAIGame():
 
                     elif action_type == "build_road":
                         v1_idx, v2_idx = action.get("v1_index"), action.get("v2_index")
-                        if v1_idx is not None and v2_idx is not None:
+                        required_resources = state_for_main_turn.action_costs["build_road"]
+                        can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
+
+                        if v1_idx is None or v2_idx is None:
+                            current_turn_last_action_status = "error_missing_input"
+                            current_turn_last_action_error_details = "Missing v1_index or v2_index for build_road."
+                        elif not can_afford:
+                            missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
+                            current_turn_last_action_status = "error_insufficient_resources"
+                            current_turn_last_action_error_details = f"Cannot build road: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
+                        else:
                             v1_coord, v2_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx), self.board.vertex_index_to_pixel_dict.get(v2_idx)
-                            if v1_coord and v2_coord: currPlayer.build_road(v1_coord, v2_coord, self.board); self.check_longest_road(currPlayer)
-                            else: print(f"Invalid vertex indices for build_road: {v1_idx}, {v2_idx}")
-                        else: print(f"Missing vertex indices for build_road action for {currPlayer.name}.")
+                            if not v1_coord or not v2_coord:
+                                current_turn_last_action_status = "error_invalid_input"
+                                current_turn_last_action_error_details = f"Invalid vertex indices for build_road: {v1_idx}, {v2_idx}. They do not exist on board."
+                            # Check if chosen road is in available_actions from the state the LLM used
+                            elif tuple(sorted((v1_idx, v2_idx))) not in state_for_main_turn.available_actions.get("build_road", []):
+                                current_turn_last_action_status = "error_invalid_placement"
+                                current_turn_last_action_error_details = f"Road from {v1_idx} to {v2_idx} is not a valid placement according to available_actions. Valid roads: {state_for_main_turn.available_actions.get('build_road', [])}."
+                            elif currPlayer.build_road(v1_coord, v2_coord, self.board): # player.build_road also checks resources again
+                                self.check_longest_road(currPlayer)
+                                current_turn_last_action_status = "success"
+                                current_turn_last_action_error_details = f"Successfully built road from {v1_idx} to {v2_idx}."
+                            else:
+                                current_turn_last_action_status = "error_rule_violation"
+                                current_turn_last_action_error_details = f"Failed to build road from {v1_idx} to {v2_idx}. Ensure it's connected and path is clear. Player.build_road returned false."
+
                     elif action_type == "build_settlement":
                         v_idx = action.get("vertex_index")
-                        if v_idx is not None:
+                        required_resources = state_for_main_turn.action_costs["build_settlement"]
+                        can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
+
+                        if v_idx is None:
+                            current_turn_last_action_status = "error_missing_input"
+                            current_turn_last_action_error_details = "Missing vertex_index for build_settlement."
+                        elif not can_afford:
+                            missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
+                            current_turn_last_action_status = "error_insufficient_resources"
+                            current_turn_last_action_error_details = f"Cannot build settlement: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
+                        else:
                             v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
-                            if v_coord: currPlayer.build_settlement(v_coord, self.board)
-                            else: print(f"Invalid vertex index for build_settlement: {v_idx}")
-                        else: print(f"Missing vertex index for build_settlement action for {currPlayer.name}.")
+                            if not v_coord:
+                                current_turn_last_action_status = "error_invalid_input"
+                                current_turn_last_action_error_details = f"Invalid vertex index for build_settlement: {v_idx}. Does not exist on board."
+                            elif v_idx not in state_for_main_turn.available_actions.get("build_settlement", []):
+                                current_turn_last_action_status = "error_invalid_placement"
+                                current_turn_last_action_error_details = f"Settlement at {v_idx} is not a valid placement. Valid locations: {state_for_main_turn.available_actions.get('build_settlement', [])}."
+                            elif currPlayer.build_settlement(v_coord, self.board):
+                                current_turn_last_action_status = "success"
+                                current_turn_last_action_error_details = f"Successfully built settlement at {v_idx}."
+                            else:
+                                current_turn_last_action_status = "error_rule_violation"
+                                current_turn_last_action_error_details = f"Failed to build settlement at {v_idx}. Check distance rules and existing structures. Player.build_settlement returned false."
+
                     elif action_type == "build_city":
                         v_idx = action.get("vertex_index")
-                        if v_idx is not None:
+                        required_resources = state_for_main_turn.action_costs["build_city"]
+                        can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
+
+                        if v_idx is None:
+                            current_turn_last_action_status = "error_missing_input"
+                            current_turn_last_action_error_details = "Missing vertex_index for build_city."
+                        elif not can_afford:
+                            missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
+                            current_turn_last_action_status = "error_insufficient_resources"
+                            current_turn_last_action_error_details = f"Cannot build city: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
+                        else:
                             v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
-                            if v_coord and v_coord in currPlayer.buildGraph['SETTLEMENTS']: currPlayer.build_city(v_coord, self.board)
-                            else: print(f"Cannot build city at {v_idx} for {currPlayer.name}")
-                        else: print(f"Missing vertex index for build_city action for {currPlayer.name}.")
+                            if not v_coord:
+                                current_turn_last_action_status = "error_invalid_input"
+                                current_turn_last_action_error_details = f"Invalid vertex index for build_city: {v_idx}. Does not exist on board."
+                            elif v_idx not in state_for_main_turn.available_actions.get("build_city", []):
+                                current_turn_last_action_status = "error_invalid_placement"
+                                current_turn_last_action_error_details = f"City at {v_idx} is not a valid placement (must be on existing settlement). Valid locations: {state_for_main_turn.available_actions.get('build_city', [])}."
+                            elif currPlayer.build_city(v_coord, self.board): # Assumes player.build_city checks if it's a settlement of the player
+                                current_turn_last_action_status = "success"
+                                current_turn_last_action_error_details = f"Successfully built city at {v_idx}."
+                            else:
+                                current_turn_last_action_status = "error_rule_violation"
+                                current_turn_last_action_error_details = f"Failed to build city at {v_idx}. Ensure you have a settlement there. Player.build_city returned false."
+
                     elif action_type == "buy_development_card":
-                        currPlayer.draw_devCard(self.board)
+                        required_resources = state_for_main_turn.action_costs["buy_development_card"]
+                        can_afford = all(currPlayer.resources.get(res,0) >= count for res, count in required_resources.items())
+                        if not self.board.devCardStack: # Check if deck is empty
+                            current_turn_last_action_status = "error_no_dev_cards_left"
+                            current_turn_last_action_error_details = "Cannot buy development card: Deck is empty."
+                        elif not can_afford:
+                            missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
+                            current_turn_last_action_status = "error_insufficient_resources"
+                            current_turn_last_action_error_details = f"Cannot buy development card: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
+                        elif currPlayer.draw_devCard(self.board):
+                            current_turn_last_action_status = "success"
+                            current_turn_last_action_error_details = "Successfully bought a development card."
+                        else: # Should not happen if previous checks pass unless draw_devCard has other logic
+                            current_turn_last_action_status = "error_unknown_failure"
+                            current_turn_last_action_error_details = "Failed to buy development card for an unknown reason."
+
                     elif action_type == "trade_with_bank":
-                        res_give, res_receive = action.get("resource_to_give"), action.get("resource_to_receive")
-                        if res_give and res_receive: currPlayer.trade_with_bank(res_give.upper(), res_receive.upper())
-                        else: print(f"Missing resources for trade_with_bank for {currPlayer.name}")
+                        res_give, res_receive = action.get("resource_to_give", "").upper(), action.get("resource_to_receive", "").upper()
+                        res_types = ["WOOD", "BRICK", "SHEEP", "WHEAT", "ORE"]
+                        if not res_give or not res_receive or res_give not in res_types or res_receive not in res_types:
+                            current_turn_last_action_status = "error_invalid_input"
+                            current_turn_last_action_error_details = f"Invalid or missing resources for trade_with_bank. Got give:'{res_give}', receive:'{res_receive}'. Must be valid resource types."
+                        else:
+                            # Determine actual trade ratio for res_give
+                            ratio = 4
+                            if state_for_main_turn.current_player_bank_trade_ratios["has_general_3_to_1_port"]:
+                                ratio = 3
+                            if state_for_main_turn.current_player_bank_trade_ratios["specific_2_to_1_ports"].get(res_give):
+                                ratio = 2
+
+                            if currPlayer.resources.get(res_give, 0) < ratio:
+                                current_turn_last_action_status = "error_insufficient_resources"
+                                current_turn_last_action_error_details = f"Cannot trade with bank: Insufficient {res_give}. You have {currPlayer.resources.get(res_give, 0)}, need {ratio} for 1 {res_receive}."
+                            elif currPlayer.trade_with_bank(res_give, res_receive): # player.trade_with_bank should use the correct ratio
+                                current_turn_last_action_status = "success"
+                                current_turn_last_action_error_details = f"Successfully traded {ratio} {res_give} for 1 {res_receive} with the bank."
+                            else: # player.trade_with_bank returned false
+                                current_turn_last_action_status = "error_unknown_failure"
+                                current_turn_last_action_error_details = f"Bank trade of {res_give} for {res_receive} failed. Player.trade_with_bank returned false."
+
                     elif action_type == "propose_trade":
                         partner_name = action.get("partner_player_name")
-                        offered = action.get("resources_offered")
+                        offered = action.get("resources_offered", {})
                         requested = action.get("resources_requested")
-                        if partner_name and offered and requested:
+                        if not partner_name or not offered or not requested:
+                            current_turn_last_action_status = "error_missing_input"
+                            current_turn_last_action_error_details = f"Invalid propose_trade: Missing partner_player_name, resources_offered, or resources_requested. Got: partner='{partner_name}', offered='{offered}', requested='{requested}'"
+                        else:
                             print(f"{currPlayer.name} proposes a trade with {partner_name}. Offering: {offered}, Requesting: {requested}.")
                             target_player = self._get_player_by_name(partner_name)
                             if not target_player:
-                                print(f"Trade failed: Player {partner_name} not found.")
+                                current_turn_last_action_status = "error_invalid_target"
+                                current_turn_last_action_error_details = f"Trade failed: Player {partner_name} not found."
                             elif target_player == currPlayer:
-                                print(f"Trade failed: Player cannot trade with themselves.")
+                                current_turn_last_action_status = "error_invalid_target"
+                                current_turn_last_action_error_details = "Trade failed: Player cannot trade with themselves."
+                            # Check if proposer has the resources to offer
+                            elif not all(currPlayer.resources.get(res, 0) >= count for res, count in offered.items()):
+                                missing_offered_res = [f"{count} {res}" for res, count in offered.items() if currPlayer.resources.get(res,0) < count]
+                                current_turn_last_action_status = "error_insufficient_resources"
+                                current_turn_last_action_error_details = f"Cannot propose trade: You don't have the resources you're offering. Missing: {', '.join(missing_offered_res)}."
                             else:
                                 if isinstance(target_player, LLMPlayer):
                                     print(f"Prompting {target_player.name} to respond to the trade offer...")
+                                    # Feedback for the target_player will be handled by their own modelState generation
+                                    # when they are prompted for the trade_response_action.
+                                    # So, no direct feedback setting here for target_player from proposer's action.
+                                    target_player.feedback_status_for_next_state = None # Clear any stale feedback for target
+                                    target_player.feedback_details_for_next_state = None
+
                                     trade_state = modelState(self, target_player,
                                                              trade_offer_pending=True,
                                                              trade_offering_player_name=currPlayer.name,
                                                              trade_resources_offered_to_you=offered,
                                                              trade_resources_requested_from_you=requested)
                                     trade_response_action = target_player.get_llm_move(trade_state)
-
                                     print(f"{target_player.name} (Trade Offer Thoughts: {target_player.thoughts}) -> Response: {trade_response_action}")
 
                                     if trade_response_action.get("type") == "accept_trade":
-                                        # Validate trade feasibility before execution
-                                        can_proposer_give = all(currPlayer.resources.get(res, 0) >= count for res, count in offered.items())
                                         can_target_give = all(target_player.resources.get(res, 0) >= count for res, count in requested.items())
+                                        if not can_target_give:
+                                            current_turn_last_action_status = "error_trade_partner_insufficient_resources"
+                                            missing_requested_res = [f"{count} {res}" for res, count in requested.items() if target_player.resources.get(res,0) < count]
+                                            current_turn_last_action_error_details = f"Trade accepted by {target_player.name}, but they lack resources: {', '.join(missing_requested_res)}. Trade cancelled."
+                                            # Also set feedback for the target player for their next turn
+                                            target_player.feedback_status_for_next_state = "error_insufficient_resources"
+                                            target_player.feedback_details_for_next_state = f"You accepted a trade but lacked the requested resources: {', '.join(missing_requested_res)}."
+                                        else: # Trade successful
+                                            for res, count in offered.items(): currPlayer.resources[res] -= count; target_player.resources[res] += count
+                                            for res, count in requested.items(): target_player.resources[res] -= count; currPlayer.resources[res] += count
+                                            current_turn_last_action_status = "success_trade_accepted"
+                                            current_turn_last_action_error_details = f"Trade accepted and completed with {target_player.name}!"
+                                            print(f"Trade completed. {currPlayer.name} resources: {currPlayer.resources}, {target_player.name} resources: {target_player.resources}")
+                                            # Feedback for target player if they accepted successfully
+                                            target_player.feedback_status_for_next_state = "success_trade_accepted"
+                                            target_player.feedback_details_for_next_state = f"You successfully accepted and completed the trade with {currPlayer.name}."
 
-                                        if can_proposer_give and can_target_give:
-                                            # Execute trade
-                                            for res, count in offered.items():
-                                                currPlayer.resources[res] -= count
-                                                target_player.resources[res] += count
-                                            for res, count in requested.items():
-                                                target_player.resources[res] -= count
-                                                currPlayer.resources[res] += count
-                                            print(f"Trade accepted and completed between {currPlayer.name} and {target_player.name}!")
-                                            print(f"{currPlayer.name} new resources: {currPlayer.resources}")
-                                            print(f"{target_player.name} new resources: {target_player.resources}")
-                                        else:
-                                            print(f"Trade accepted by {target_player.name}, but resources are insufficient. Trade cancelled.")
-                                            if not can_proposer_give: print(f"{currPlayer.name} lacks resources for offer.")
-                                            if not can_target_give: print(f"{target_player.name} lacks resources for request.")
-                                    else: # Implicitly reject_trade or invalid response
-                                        print(f"{target_player.name} rejected the trade or gave an invalid response.")
+                                    else: # Trade rejected by target LLM
+                                        current_turn_last_action_status = "info_trade_rejected"
+                                        current_turn_last_action_error_details = f"{target_player.name} rejected the trade or gave an invalid response ({trade_response_action.get('type')})."
+                                        # Feedback for target player if they rejected
+                                        target_player.feedback_status_for_next_state = "info_trade_rejected"
+                                        target_player.feedback_details_for_next_state = f"You rejected or did not validly respond to the trade from {currPlayer.name}."
+
                                 elif isinstance(target_player, heuristicAIPlayer):
-                                    # Basic heuristic: always reject for now, or implement simple logic
                                     print(f"Heuristic AI {target_player.name} automatically rejects trade with {currPlayer.name} for now.")
-                                else: # Human player target (not handled in AIGame, but for completeness)
-                                    print(f"Trade proposed to human player {target_player.name}. This is not handled in AI-only game mode.")
-                        else:
-                            print(f"Invalid propose_trade action from {currPlayer.name}: Missing parameters.")
+                                    current_turn_last_action_status = "info_trade_rejected_heuristic"
+                                    current_turn_last_action_error_details = f"Trade with Heuristic AI {target_player.name} was automatically rejected."
+                                else:
+                                    current_turn_last_action_status = "error_invalid_target_type"
+                                    current_turn_last_action_error_details = f"Trade proposed to non-LLM/non-Heuristic player {target_player.name}. Not handled."
+
                     elif action_type == "play_knight_card":
-                        print(f"{currPlayer.name} wants to play a KNIGHT card (conceptual - not fully implemented).")
-                        pass
+                        # Basic check: does player have a knight card?
+                        if currPlayer.devCards.get("KNIGHT", 0) > 0:
+                             # currPlayer.playKnightCard(self.board) # This method needs to exist and handle robber movement prompt
+                             # For now, just acknowledge and set placeholder feedback
+                            print(f"{currPlayer.name} wants to play a KNIGHT card.")
+                            current_turn_last_action_status = "info_knight_played_concept" # Placeholder
+                            current_turn_last_action_error_details = "Knight card play initiated (robber movement part not fully detailed here for LLM feedback yet)."
+                            # Actual robber movement after knight would be a separate state/prompt for the LLM.
+                            # This action itself (playing the card) is successful if they have it.
+                            # The consequence (moving robber) is what needs more detailed handling.
+                            # For now, let's assume playing the card deducts it and sets flag.
+                            # Robber movement would then be triggered.
+                            # This part needs careful sequencing if the LLM is to choose where to move the robber *after* playing knight.
+                            # For now, we'll assume the `player.playKnightCard` handles this internally or flags for it.
+                            # Let's assume a simplified player.play_knight() that returns true/false.
+                            # if currPlayer.play_knight_card_method_on_player_object(self.board):
+                            #    current_turn_last_action_status = "success"
+                            #    current_turn_last_action_error_details = "Successfully played Knight card. Robber phase will follow if applicable."
+                            #    self.check_largest_army(currPlayer) # Check for largest army
+                            #    self.player_to_move_robber = currPlayer # Trigger robber movement by this player
+                            # else:
+                            #    current_turn_last_action_status = "error_play_knight_failed"
+                            #    current_turn_last_action_error_details = "Failed to play Knight card (e.g., already played dev card this turn)."
+                            # This is a simplification. Full implementation of play_knight_card is complex.
+                        else:
+                            current_turn_last_action_status = "error_no_knight_card"
+                            current_turn_last_action_error_details = "Cannot play Knight card: You do not have one."
+
                     elif action_type == "end_turn":
+                        current_turn_last_action_status = "success_end_turn" # Explicitly success
+                        current_turn_last_action_error_details = "Player chose to end their turn."
                         print(f"{currPlayer.name} ends their turn.")
-                    else: # Unknown action or if LLM robber phase returned non-robber action
+                    else:
+                        current_turn_last_action_status = "error_unknown_action"
+                        current_turn_last_action_error_details = f"Unknown or unsupported main action type: '{action_type}'. Player ends turn by default."
                         print(f"Unknown or unsupported main action type: {action_type} for {currPlayer.name}. Player ends turn by default.")
 
+                    # Store feedback for the LLM player's next modelState generation
+                    if isinstance(currPlayer, LLMPlayer):
+                        currPlayer.feedback_status_for_next_state = current_turn_last_action_status
+                        currPlayer.feedback_details_for_next_state = current_turn_last_action_error_details
+                        # Print the feedback that will be available for the next state
+                        print(f"Feedback for {currPlayer.name}'s next state: Status='{currPlayer.feedback_status_for_next_state}', Details='{currPlayer.feedback_details_for_next_state}'")
+
+
                 elif isinstance(currPlayer, heuristicAIPlayer):
-                    # ... (Heuristic main turn action logic as before) ...
                     print(f"{currPlayer.name} (Heuristic) is making moves...")
                     currPlayer.move(self.board)
                     self.check_longest_road(currPlayer)
