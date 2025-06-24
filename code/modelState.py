@@ -16,10 +16,25 @@ class modelState():
                  trade_offer_pending: bool = False,
                  trade_offering_player_name: str = None,
                  trade_resources_offered_to_you: dict = None,
-                 trade_resources_requested_from_you: dict = None):
+                 trade_resources_requested_from_you: dict = None,
+                 private_chat_active: bool = False, # Added for private chat context
+                 communication_phase_active: bool = False): # Added for global communication phase context
         self.board = self.get_board_state(catan_game.board)
         self.players = self.get_players_state(catan_game.playerQueue.queue, current_player, catan_game.board)
         self.current_player_name = current_player.name
+
+        # Chat histories and phases
+        self.global_chat_history = catan_game.global_chat_history[-10:] # Include last 10 global messages
+        self.private_chat_history = []
+        if hasattr(current_player, 'name') and hasattr(catan_game, 'private_chat_histories'):
+            for (p1_name, p2_name), history in catan_game.private_chat_histories.items():
+                if current_player.name in (p1_name, p2_name):
+                    self.private_chat_history.append({
+                        "participants": [p1_name, p2_name],
+                        "history": history[-10:]
+                    })
+        self.private_chat_active = private_chat_active
+        self.communication_phase_active = communication_phase_active # Reflects game's current communication phase status
 
         # Game phase (setup or main)
         # The game_phase logic seems a bit complex; game.gameSetup should be the primary source of truth.

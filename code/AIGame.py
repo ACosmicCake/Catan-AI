@@ -27,6 +27,12 @@ class catanAIGame():
         self.maxPoints = 10
         self.numPlayers = 0
 
+        # Chat histories
+        self.global_chat_history = []
+        self.private_chat_histories = {} # Key: tuple(sorted_player_names), Value: list of messages
+        self.communication_phase_active = False # Flag to manage new game loop state
+        self.active_private_chat_participants = None # Tuple (player1_name, player2_name) or None
+
         #Dictionary to keep track of dice statistics
         self.diceStats = {2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0, 11:0, 12:0}
         self.diceStats_list = []
@@ -659,16 +665,109 @@ class catanAIGame():
 
         player_who_moves_robber.move_robber(target_hex_idx, self.board, player_to_rob_obj)
 
+    def handle_private_chat(self, initiator, recipient, opening_message):
+        self.active_private_chat_participants = tuple(sorted((initiator.name, recipient.name)))
+        chat_key = self.active_private_chat_participants # Use the sorted tuple directly
+
+        if chat_key not in self.private_chat_histories:
+            self.private_chat_histories[chat_key] = []
+
+        # Add opening message
+        self.private_chat_histories[chat_key].append({"player": initiator.name, "message": opening_message})
+        print(f"[Private Chat | {initiator.name} to {recipient.name}]: {opening_message}")
+        self.boardView.displayGameScreen() # Update GUI to show chat status
+
+        current_speaker = recipient # Recipient gets to respond first
+        other_speaker = initiator
+        max_exchanges = 4 # Max 4 exchanges (initiator -> recipient -> initiator -> recipient -> initiator -> recipient -> initiator -> recipient) = 8 messages total (incl opener)
+
+        for exchange_num in range(max_exchanges * 2 -1): # Max messages after opener
+            # Create a modelState indicating a private chat is active
+            # The modelState needs to be created for the 'current_speaker'
+            chat_state = modelState(self, current_speaker, private_chat_active=True, communication_phase_active=False)
+
+            print(f"--- Private Chat: {current_speaker.name}'s turn to speak to {other_speaker.name} ---")
+            response_action = current_speaker.get_llm_move(chat_state)
+            action_type = response_action.get("type")
+            message_content = response_action.get("message") # For send_private_message
+
+            if action_type == "send_private_message" and message_content:
+                self.private_chat_histories[chat_key].append({"player": current_speaker.name, "message": message_content})
+                print(f"[Private Chat | {current_speaker.name} to {other_speaker.name}]: {message_content}")
+                # Swap speaker for next turn
+                current_speaker, other_speaker = other_speaker, current_speaker
+
+            elif action_type == "accept_trade":
+                 # TODO: Handle the trade logic. This is complex.
+                 # Need to know what was proposed. This might require the LLM to re-state the trade.
+                 # Or, the private chat context should make the trade clear.
+                 print(f"[Private Chat | {current_speaker.name}]: Accepted trade with {other_speaker.name}! (Trade execution logic TBD). Exiting chat.")
+                 # Potentially, the LLM that accepts should then make a formal "propose_trade" or "accept_trade" action
+                 # that the game loop can process with resource validation.
+                 # For now, just end the chat.
+                 break
+
+            elif action_type == "end_private_chat":
+                print(f"[Private Chat | {current_speaker.name}]: Ended chat with {other_speaker.name}.")
+                break
+
+            else: # Any other action, or invalid action, ends the chat.
+                print(f"[Private Chat | {current_speaker.name}]: Action ({action_type}) ended chat with {other_speaker.name}.")
+                break
+
+            self.boardView.displayGameScreen() # Update GUI
+            pygame.time.delay(200) # Small delay for readability
+
+        print(f"--- Private Chat between {initiator.name} and {recipient.name} concluded. ---")
+        self.active_private_chat_participants = None # Clear active chat participants
+        self.boardView.displayGameScreen() # Final update
+
 
     #Function that runs the main game loop with all players and pieces
     def playCatan(self):
         numTurns = 0
         while not self.gameOver:
+            # --- Communication Phase (before any player takes their turn) ---
+            if not self.gameSetup: # No communication phase during initial setup
+                print("--- Communication Phase ---")
+                self.communication_phase_active = True
+                for player_speaker in list(self.playerQueue.queue):
+                    if isinstance(player_speaker, LLMPlayer):
+                        # Create a modelState specifically for this communication phase
+                        comm_state = modelState(self, player_speaker,
+                                                private_chat_active=False,
+                                                communication_phase_active=self.communication_phase_active)
+
+                        # Modify modelState to indicate communication phase.
+                        # This is a bit of a hack; ideally, modelState would take a phase parameter.
+                        # For now, we'll set a temporary attribute on comm_state if modelState doesn't directly support this.
+                        # Or, ensure LLMPlayer prompt construction correctly uses self.communication_phase_active from game.
+                        # The modelState now has private_chat_active, let's add communication_phase_active for clarity.
+                        # We will need to modify modelState to accept 'communication_phase_active'
+                        # For now, let's assume modelState correctly uses game.communication_phase_active via the 'self' (catan_game) passed.
+                        # The LLMPlayer's _construct_prompt already checks game_state_obj.communication_phase_active
+
+                        comm_action = player_speaker.get_llm_move(comm_state) # LLM decides if it wants to speak
+
+                        if comm_action and comm_action.get("type") == "send_global_message":
+                            message = comm_action.get("message")
+                            if message: # Ensure message is not empty
+                                print(f"[Global Chat | {player_speaker.name}]: {message}")
+                                self.global_chat_history.append({"player": player_speaker.name, "message": message})
+                                # self.boardView.displayGameScreen() # Update GUI - may cause too many updates if frequent
+                        elif comm_action and comm_action.get("type") != "end_turn":
+                             print(f"[Communication Phase | {player_speaker.name}]: Chose not to speak or invalid action ({comm_action.get('type')}).")
+                        # else: player chose end_turn (i.e. to say nothing) or action was None
+
+                self.communication_phase_active = False # Reset flag after phase
+                self.boardView.displayGameScreen() # Update GUI once after communication phase
+
             for currPlayer in list(self.playerQueue.queue): # Iterate on a copy if queue is modified
                 numTurns += 1
                 print("---------------------------------------------------------------------------")
-                print(f"Current Player: {currPlayer.name} (Color: {currPlayer.color})")
-                
+                # print(f"Current Player: {currPlayer.name} (Color: {currPlayer.color})") # Moved to after communication phase print
+                print(f"--- {currPlayer.name}'s Turn (Color: {currPlayer.color}) ---")
+
                 currPlayer.updateDevCards()
                 currPlayer.devCardPlayedThisTurn = False
 
@@ -757,12 +856,50 @@ class catanAIGame():
                 if isinstance(currPlayer, LLMPlayer):
                     # ... (LLM main turn action logic as before) ...
                     print(f"{currPlayer.name} taking main turn actions...")
-                    state_for_main_turn = modelState(self, currPlayer)
+                    # Create modelState without private_chat_active=True for normal turn actions
+                    state_for_main_turn = modelState(self, currPlayer, private_chat_active=False, communication_phase_active=False)
                     action = currPlayer.get_llm_move(state_for_main_turn)
                     print(f"{currPlayer.name} (Main Turn Thoughts: {currPlayer.thoughts}) -> Action: {action}")
-                    # ... (action processing as before, same as previous step) ...
+
                     action_type = action.get("type")
-                    if action_type == "build_road":
+
+                    # Handle global message during main turn if chosen
+                    if action_type == "send_global_message":
+                        message = action.get("message")
+                        if message:
+                            print(f"[Global Chat | {currPlayer.name}]: {message}")
+                            self.global_chat_history.append({"player": currPlayer.name, "message": message})
+                            # Potentially get another action after sending a message, or end turn.
+                            # For now, sending a global message is a turn-ending action unless combined with others.
+                            # The current LLM prompt implies it's one of the main actions. Let's assume it's final for now.
+                            # Update: The prompt allows it as one of many. If it's chosen, we process and then player might do more.
+                            # This might need a loop or re-prompting if we want multiple actions per turn.
+                            # For simplicity, let's assume for now if send_global_message is the primary action, it's the only one processed here.
+                            # Re-evaluate if LLM is expected to do more after this.
+                            # If other actions are possible, this 'if' should not be an 'elif' chain.
+                            # Based on current structure, we process one main action.
+
+                    elif action_type == "initiate_private_chat":
+                        recipient_name = action.get("recipient_name")
+                        opening_message = action.get("opening_message")
+                        recipient_player = self._get_player_by_name(recipient_name)
+
+                        if recipient_player and isinstance(recipient_player, LLMPlayer) and recipient_player != currPlayer:
+                            if opening_message:
+                                print(f"{currPlayer.name} is starting a private chat with {recipient_name}.")
+                                self.handle_private_chat(currPlayer, recipient_player, opening_message)
+                            else:
+                                print(f"{currPlayer.name} tried to initiate chat with {recipient_name} but provided no opening message.")
+                        elif recipient_player == currPlayer:
+                            print(f"{currPlayer.name} tried to initiate chat with themselves. Action ignored.")
+                        elif not isinstance(recipient_player, LLMPlayer):
+                            print(f"{currPlayer.name} tried to initiate chat with {recipient_name}, but they are not an LLM player or cannot chat. Action ignored.")
+                        else:
+                            print(f"Player {recipient_name} not found for private chat initiated by {currPlayer.name}.")
+                        # After chat, turn effectively ends or continues based on handle_private_chat behavior.
+                        # For now, let's assume initiating a chat is the main action for the turn.
+
+                    elif action_type == "build_road":
                         v1_idx, v2_idx = action.get("v1_index"), action.get("v2_index")
                         if v1_idx is not None and v2_idx is not None:
                             v1_coord, v2_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx), self.board.vertex_index_to_pixel_dict.get(v2_idx)

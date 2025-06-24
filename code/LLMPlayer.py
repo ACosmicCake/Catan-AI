@@ -29,22 +29,59 @@ class LLMPlayer(player):
                 previous_action_feedback += f" Details: {game_state_obj.last_action_error_details}."
             previous_action_feedback += " Please try a different valid action or correct your previous one.\n"
 
-        instructions = "Your turn to make a move. Analyze the game state and decide on the best action."
-        possible_actions = "Your possible actions are: build_road, build_settlement, build_city, buy_development_card, trade_with_bank, propose_trade, end_turn."
-        # Note: play_dev_card, discard_cards are also actions but might need more specific prompting.
-        # The available_actions in modelState should be the primary guide for the LLM.
+        # Communication Phase Related Instructions
+        communication_instructions = ""
+        private_chat_instructions = ""
 
-        example_actions = [
-            {"thoughts": "I should build a road to expand.", "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}},
-            {"thoughts": "I want to build a settlement at vertex 5.", "action": {"type": "build_settlement", "vertex_index": 5}},
-            {"thoughts": "I need BRICK. I'll offer 1 WOOD for 1 BRICK to Player2-AI.", "action": {"type": "propose_trade", "partner_player_name": "Player2-AI-Name", "resources_offered": {"WOOD": 1}, "resources_requested": {"BRICK": 1}}},
-            {"thoughts": "I will end my turn.", "action": {"type": "end_turn"}}
-        ]
+        if hasattr(game_state_obj, 'private_chat_active') and game_state_obj.private_chat_active:
+            # Determine who the other participant is. The private_chat_history should contain this.
+            other_participant_name = "the other player"
+            if game_state_obj.private_chat_history and game_state_obj.private_chat_history[0]["participants"]:
+                current_player_name = game_state_obj.current_player_name
+                participants = game_state_obj.private_chat_history[0]["participants"]
+                other_participant_name = next((p for p in participants if p != current_player_name), "the other player")
 
-        # Specific instructions based on game state take precedence
-        if hasattr(game_state_obj, 'robber_movement_is_mandatory') and game_state_obj.robber_movement_is_mandatory:
-            instructions = "A 7 was rolled and you MUST move the robber. This is your only action for this specific decision."
-            possible_actions = "Your ONLY action for this decision must be: move_robber. Consult 'available_actions' in the game state for valid hex indices to move the robber to (generally any hex not currently occupied by the robber)."
+            instructions = f"You are in a private chat with {other_participant_name}. Continue the conversation or end the chat. Focus on this private interaction."
+            possible_actions = (f"Your possible actions are: send_private_message (to {other_participant_name}), "
+                                f"accept_trade (if a trade was implicitly or explicitly offered and you agree), "
+                                f"end_private_chat (with {other_participant_name}). "
+                                "You can also propose a standard game action like 'propose_trade' if relevant to the discussion, "
+                                "but 'send_private_message' is for general chat.")
+            example_actions = [
+                {"thoughts": "I need to clarify their offer.", "action": {"type": "send_private_message", "recipient_name": other_participant_name, "message": "Can you offer one more WHEAT?"}},
+                {"thoughts": "Their last message makes sense, I will accept the trade they outlined.", "action": {"type": "accept_trade"}}, # Assuming trade context is clear
+                {"thoughts": "I think we are done talking for now.", "action": {"type": "end_private_chat", "recipient_name": other_participant_name}}
+            ]
+            private_chat_instructions = "The game state includes 'private_chat_history' with your current conversation.\n"
+
+        elif hasattr(game_state_obj, 'communication_phase_active') and game_state_obj.communication_phase_active:
+            instructions = "It is the Communication Phase. You can send a global message to all players."
+            possible_actions = "Your possible actions are: send_global_message, end_turn (to say nothing)."
+            example_actions = [
+                {"thoughts": "I want to announce my intentions.", "action": {"type": "send_global_message", "message": "Hello everyone! I am planning to expand towards the ore port."}},
+                {"thoughts": "I have nothing to say right now.", "action": {"type": "end_turn"}}
+            ]
+            communication_instructions = "The game state includes 'global_chat_history' with the last 10 messages.\n"
+        else: # Standard turn
+            instructions = "Your turn to make a move. Analyze the game state and decide on the best action."
+            possible_actions = ("Your possible actions are: build_road, build_settlement, build_city, buy_development_card, "
+                                "trade_with_bank, propose_trade (this is for player-to-player trades outside of dedicated private chat), "
+                                "initiate_private_chat (to start a 1-on-1 conversation with another LLM player for negotiation), "
+                                "send_global_message, end_turn.")
+            example_actions = [
+                {"thoughts": "I should build a road to expand.", "action": {"type": "build_road", "v1_index": 0, "v2_index": 1}},
+                {"thoughts": "I want to build a settlement at vertex 5.", "action": {"type": "build_settlement", "vertex_index": 5}},
+                {"thoughts": "I want to discuss a trade with Player2-AI.", "action": {"type": "initiate_private_chat", "recipient_name": "Player2-AI-Name", "opening_message": "Hey, I'm interested in your ORE. What would you want for it?"}},
+                {"thoughts": "I want to make a public statement.", "action": {"type": "send_global_message", "message": "I am looking for WHEAT, willing to trade ORE."}},
+                {"thoughts": "I will end my turn.", "action": {"type": "end_turn"}}
+            ]
+
+        # Specific instructions based on game state take precedence (unless in communication or private chat phase where it's already handled)
+        if not (hasattr(game_state_obj, 'private_chat_active') and game_state_obj.private_chat_active) and \
+           not (hasattr(game_state_obj, 'communication_phase_active') and game_state_obj.communication_phase_active):
+            if hasattr(game_state_obj, 'robber_movement_is_mandatory') and game_state_obj.robber_movement_is_mandatory:
+                instructions = "A 7 was rolled and you MUST move the robber. This is your only action for this specific decision."
+                possible_actions = "Your ONLY action for this decision must be: move_robber. Consult 'available_actions' in the game state for valid hex indices to move the robber to (generally any hex not currently occupied by the robber)."
             example_actions = [
                 {"thoughts": "I need to move the robber. I'll choose hex 10 and target Player X if available.", "action": {"type": "move_robber", "hex_index": 10, "player_to_rob_name": "PlayerX_Name_Or_Null"}}
             ]
@@ -120,11 +157,11 @@ class LLMPlayer(player):
 You are an expert Settlers of Catan player. Here is the current game state:
 {game_state_json}
 
-{previous_action_feedback}{instructions}
+{previous_action_feedback}{communication_instructions}{private_chat_instructions}{instructions}
 {possible_actions}
-Refer to the 'available_actions' section within the game state JSON to see currently valid locations for building.
-The 'action_costs' section lists the resource costs for standard building actions.
-The 'current_player_bank_trade_ratios' section details your current exchange rates with the bank, including any port benefits. Use this when considering a 'trade_with_bank' action.
+Refer to the 'available_actions' section within the game state JSON to see currently valid locations for building (if applicable to current phase).
+The 'action_costs' section lists the resource costs for standard building actions (if applicable).
+The 'current_player_bank_trade_ratios' section details your current exchange rates with the bank, including any port benefits. Use this when considering a 'trade_with_bank' action (if applicable).
 Provide your reasoning in a 'thoughts' field and the chosen action in an 'action' field in JSON format.
 {example_str}
 Ensure your entire response is a single valid JSON object.
@@ -238,7 +275,13 @@ Ensure your entire response is a single valid JSON object.
                                                         }
                                                     },
                                                     "resource_to_give": {"type": "string"}, # For bank trade
-                                                    "resource_to_receive": {"type": "string"} # For bank trade
+                                                    "resource_to_receive": {"type": "string"}, # For bank trade
+                                                    "partner_player_name": {"type": "string"}, # For propose_trade
+                                                    "resources_offered": {"type": "object"},   # For propose_trade
+                                                    "resources_requested": {"type": "object"}, # For propose_trade
+                                                    "recipient_name": {"type": "string"},      # For private chat actions
+                                                    "opening_message": {"type": "string"},     # For initiate_private_chat
+                                                    "message": {"type": "string"}              # For send_global_message, send_private_message
                                                 },
                                                 "required": ["type"]
                                             }

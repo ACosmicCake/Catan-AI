@@ -204,6 +204,43 @@ class catanGameView():
             for cityCoord in player_i.buildGraph['CITIES']:
                 self.draw_city(cityCoord, player_i.color)
 
+        # Display Global Chat History
+        chat_base_x = 150  # X position for chat display (left side, below buttons)
+        chat_base_y = 600 # Starting Y position for chat
+        chat_line_height = 15 # Height for each line of chat text
+        chat_font = pygame.font.SysFont('consolas', 12) # Monospaced font for chat
+        chat_max_lines = 10 # Max lines of chat to show
+
+        # Draw a background box for the chat
+        chat_history_to_display = self.game.global_chat_history[-chat_max_lines:]
+        if chat_history_to_display:
+            num_chat_lines = len(chat_history_to_display)
+            chat_box_height = num_chat_lines * chat_line_height + 10 # Add some padding
+            chat_box_width = 600 # Adjust as needed
+            pygame.draw.rect(self.screen, pygame.Color('gray20'), (chat_base_x - 5, chat_base_y - 5, chat_box_width, chat_box_height))
+
+            for idx, chat_entry in enumerate(chat_history_to_display):
+                player_name = chat_entry.get("player", "System")
+                message = chat_entry.get("message", "")
+                chat_text_surface = chat_font.render(f"[{player_name}]: {message}", True, (220, 220, 220)) # Light gray text
+                self.screen.blit(chat_text_surface, (chat_base_x, chat_base_y + (idx * chat_line_height)))
+
+        # Display Private Chat Status
+        if hasattr(self.game, 'active_private_chat_participants') and self.game.active_private_chat_participants:
+            p1_name, p2_name = self.game.active_private_chat_participants
+            status_font = pygame.font.SysFont('cambria', 14)
+            status_text = f"Private Chat Active: {p1_name} and {p2_name}"
+            status_surface = status_font.render(status_text, True, pygame.Color('yellow'))
+
+            # Position it somewhere visible, e.g., top-middle or above global chat
+            status_x = self.board.width // 2 - status_surface.get_width() // 2
+            status_y = 10 # Near the top
+
+            # Optional: Draw a background for better visibility
+            pygame.draw.rect(self.screen, pygame.Color('gray10'),
+                             (status_x - 5, status_y - 2, status_surface.get_width() + 10, status_surface.get_height() + 4))
+            self.screen.blit(status_surface, (status_x, status_y))
+
         pygame.display.update()
         return
         #TO-DO Add screens for trades
