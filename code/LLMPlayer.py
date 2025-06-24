@@ -277,8 +277,28 @@ Ensure your entire response is a single valid JSON object.
                                                     "resource_to_give": {"type": "string"}, # For bank trade
                                                     "resource_to_receive": {"type": "string"}, # For bank trade
                                                     "partner_player_name": {"type": "string"}, # For propose_trade
-                                                    "resources_offered": {"type": "object"},   # For propose_trade
-                                                    "resources_requested": {"type": "object"}, # For propose_trade
+                                                    "resources_offered": {   # For propose_trade
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "WOOD": {"type": "integer"},
+                                                            "BRICK": {"type": "integer"},
+                                                            "SHEEP": {"type": "integer"},
+                                                            "WHEAT": {"type": "integer"},
+                                                            "ORE": {"type": "integer"}
+                                                        },
+                                                        # "required": [] # Not making individual resources required within the object
+                                                    },
+                                                    "resources_requested": { # For propose_trade
+                                                        "type": "object",
+                                                        "properties": {
+                                                            "WOOD": {"type": "integer"},
+                                                            "BRICK": {"type": "integer"},
+                                                            "SHEEP": {"type": "integer"},
+                                                            "WHEAT": {"type": "integer"},
+                                                            "ORE": {"type": "integer"}
+                                                        },
+                                                        # "required": []
+                                                    },
                                                     "recipient_name": {"type": "string"},      # For private chat actions
                                                     "opening_message": {"type": "string"},     # For initiate_private_chat
                                                     "message": {"type": "string"}              # For send_global_message, send_private_message
