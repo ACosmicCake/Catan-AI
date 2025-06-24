@@ -244,7 +244,7 @@ Ensure your entire response is a single valid JSON object.
                             # For safety, stick to 'gemini-pro' if 'gemini-2.5-flash' is not a generally available model name.
                             # The google-generativeai library typically uses 'gemini-pro' or 'gemini-1.0-pro' or 'gemini-1.5-pro-latest'.
                             # Let's use 'gemini-pro' as a default.
-                            current_gemini_model_name = "gemini-2.5-flash-lite-preview-06-17"
+                            current_gemini_model_name = "gemini-2.5-flash"
                             # print(f"GEMINI PROMPT for {self.name} (model: {current_gemini_model_name}):\n{prompt}") # For debugging
                             response = self.gemini_client.models.generate_content(
                                 model=f"models/{current_gemini_model_name}", # Model name might need "models/" prefix
