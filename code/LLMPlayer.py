@@ -6,13 +6,22 @@ from google import genai
 
 
 class LLMPlayer(player):
-    def __init__(self, playerName, playerColor, llm_type):
+    def __init__(self, playerName, playerColor, llm_type, persona=None): # Added persona
         super().__init__(playerName, playerColor)
         self.llm_type = llm_type
         self.thoughts = ""
         self.gemini_client = None # Changed from self.gemini_model
         self.feedback_status_for_next_state = None
         self.feedback_details_for_next_state = None
+        self.memory = [] # Added memory attribute
+        self.persona = persona # Added persona attribute
+        self.max_memory_entries = 5 # Max recent memories to include in prompt
+
+    def add_memory_entry(self, entry_summary: str):
+        """Adds a new memory entry and keeps the list to a maximum size."""
+        self.memory.append(entry_summary)
+        if len(self.memory) > self.max_memory_entries:
+            self.memory.pop(0) # Remove the oldest entry
 
     def _strip_markdown_json(self, text_response):
         # Check if the response is wrapped in markdown JSON backticks
@@ -34,8 +43,54 @@ class LLMPlayer(player):
         # Communication Phase Related Instructions
         communication_instructions = ""
         private_chat_instructions = ""
+        negotiation_instructions_text = "" # For the final prompt assembly
 
-        if hasattr(game_state_obj, 'private_chat_active') and game_state_obj.private_chat_active:
+        # --- Negotiation State Handling ---
+        if hasattr(game_state_obj, 'negotiation_in_progress') and game_state_obj.negotiation_in_progress and \
+           hasattr(game_state_obj, 'your_turn_to_negotiate') and game_state_obj.your_turn_to_negotiate:
+
+            partner_name = game_state_obj.negotiation_partner_name if hasattr(game_state_obj, 'negotiation_partner_name') else "the other player"
+
+            instructions = (f"You are in a trade negotiation with {partner_name}. "
+                            "Analyze the negotiation history and your resources to decide your next move. "
+                            "You can accept the last offer, propose a counter-offer, or end the negotiation.")
+
+            possible_actions = ("Your possible actions are: accept_trade, propose_counter_offer, end_negotiation.")
+
+            # Example resources for counter-offer, make them simple and generic
+            example_offer_res = {"WOOD": 1}
+            example_request_res = {"BRICK": 1}
+            if hasattr(game_state_obj, 'players'): # Try to get some actual resources for a more realistic example
+                current_player_state = next((p for p in game_state_obj.players if p['name'] == game_state_obj.current_player_name), None)
+                if current_player_state and sum(current_player_state['resources'].values()) > 0:
+                    # Find first resource current player has to offer
+                    for res, count in current_player_state['resources'].items():
+                        if count > 0:
+                            example_offer_res = {res: 1}
+                            break
+                # Find a resource the partner might have (simplistic: just pick a different one)
+                other_player_state = next((p for p in game_state_obj.players if p['name'] == partner_name), None)
+                if other_player_state: # and sum(other_player_state['resources'].values()) > 0 : # Cannot see partner's resources directly
+                    # Just pick a resource different from what current player offers, if possible
+                    all_res_types = ["WOOD", "BRICK", "SHEEP", "WHEAT", "ORE"]
+                    offered_res_type = list(example_offer_res.keys())[0]
+                    potential_request_types = [r for r in all_res_types if r != offered_res_type]
+                    if potential_request_types:
+                        example_request_res = {potential_request_types[0]: 1}
+
+
+            example_actions = [
+                {"thoughts": f"The last offer from {partner_name} is acceptable.", "long_term_plan": "Secure resources for my next build.", "action": {"type": "accept_trade"}},
+                {"thoughts": f"I need more than what {partner_name} offered. I will propose a counter.", "long_term_plan": "Get a better deal or walk away.", "action": {"type": "propose_counter_offer", "resources_offered": example_offer_res, "resources_requested": example_request_res}},
+                {"thoughts": "This negotiation is not going anywhere.", "long_term_plan": "Focus on other strategies.", "action": {"type": "end_negotiation", "reason": "The terms are not favorable."}}
+            ]
+
+            negotiation_history_json = json.dumps(game_state_obj.negotiation_history, indent=2)
+            # Ensure negotiation_instructions_text is set here to be included in the prompt
+            negotiation_instructions_text = (f"You are in a trade negotiation with {partner_name}.\n"
+                                             f"The negotiation history so far is:\n{negotiation_history_json}\n")
+
+        elif hasattr(game_state_obj, 'private_chat_active') and game_state_obj.private_chat_active:
             # Determine who the other participant is. The private_chat_history should contain this.
             other_participant_name = "the other player"
             if game_state_obj.private_chat_history and game_state_obj.private_chat_history[0]["participants"]:
@@ -180,11 +235,33 @@ class LLMPlayer(player):
 
 
 
+        # --- Memory and Persona Section ---
+        memory_prompt_section = ""
+        if self.memory:
+            # self.memory already contains the last N entries due to add_memory_entry logic
+            recent_memories_str = "\n".join([f"- {mem}" for mem in self.memory])
+            memory_prompt_section = f"Your Recent History (last {len(self.memory)} actions/events):\n{recent_memories_str}\n\n"
+
+        persona_prompt_section = ""
+        if self.persona:
+            persona_guidance = {
+                "Aggressive": "You are an 'Aggressive' player. Prioritize actions that disrupt opponents or secure critical resources, even at some cost to yourself.",
+                "Hoarder": "You are a 'Hoarder' player. Focus on accumulating resources and building up a large hand. Be more reluctant to trade unless it's very favorable for you.",
+                "Diplomat": "You are a 'Diplomat' player. Favor negotiation and trading with other players. Try to maintain good relations but always aim for your benefit through deals.",
+                "Risk-Averse": "You are a 'Risk-Averse' player. Prefer safer bets, avoid risky early development card purchases, and prioritize steady, defensible growth."
+                # Can add more personas here
+            }
+            if self.persona in persona_guidance:
+                persona_prompt_section = persona_guidance[self.persona] + "\n\n"
+            else: # Generic if persona string is custom/unknown but provided
+                persona_prompt_section = f"Your guiding persona is: '{self.persona}'. Let this influence your decisions and play style.\n\n"
+
         return f"""
-You are an expert Settlers of Catan player. Here is the current game state:
+You are an expert Settlers of Catan player.
+{persona_prompt_section}Here is the current game state:
 {game_state_json}
 
-{previous_action_feedback}{communication_instructions}{private_chat_instructions}{instructions}
+{memory_prompt_section}{previous_action_feedback}{communication_instructions}{private_chat_instructions}{negotiation_instructions_text}{instructions}
 {possible_actions}
 Refer to the 'available_actions' section within the game state JSON to see currently valid locations for building (if applicable to current phase).
 The 'action_costs' section lists the resource costs for standard building actions (if applicable).

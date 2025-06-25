@@ -35,11 +35,42 @@ class modelState():
                  trade_resources_offered_to_you: dict = None,
                  trade_resources_requested_from_you: dict = None,
                  private_chat_active: bool = False, # Added for private chat context
-                 communication_phase_active: bool = False): # Added for global communication phase context
-        self.board = self.get_board_state(catan_game.board)
-        self.players = self.get_players_state(catan_game.playerQueue.queue, current_player, catan_game.board)
+                 communication_phase_active: bool = False, # Added for global communication phase context
+                 # Negotiation specific flags passed during construction if this state is for a negotiation turn
+                 is_negotiation_turn: bool = False,
+                 negotiation_partner_name: str = None):
+        self.board = self.get_board_state(catan_game.board) # Gets initial board state including choke points placeholder for hex_control
+        self.players = self.get_players_state(catan_game, current_player, catan_game.board) # Pass full game for maxPoints access
+
+        # Calculate hex_control now that both board and player states (with settlement/city locations) are available
+        # Need pixel_to_vertex_index_map for _calculate_hex_control
+        pixel_to_vertex_index_map = {v_pixel: v_idx for v_idx, v_pixel in catan_game.board.vertex_index_to_pixel_dict.items()}
+        self._calculate_hex_control(catan_game.board, self.players, pixel_to_vertex_index_map)
+
         self.current_player_name = current_player.name
         self.development_cards_left_in_deck = len(catan_game.board.devCardStack) if hasattr(catan_game, 'board') and hasattr(catan_game.board, 'devCardStack') else 0
+
+        # Initialize negotiation fields
+        self.negotiation_in_progress = False
+        self.negotiation_participants = []
+        self.negotiation_history = []
+        self.your_turn_to_negotiate = False
+        self.negotiation_partner_name = None # Companion to your_turn_to_negotiate
+
+        if hasattr(catan_game, 'negotiation_active') and catan_game.negotiation_active:
+            # Check if the current_player is part of the active negotiation
+            negotiation_ctx = catan_game.negotiation_context
+            if negotiation_ctx.get('initiator') == current_player or negotiation_ctx.get('target') == current_player:
+                self.negotiation_in_progress = True
+                self.negotiation_participants = [negotiation_ctx['initiator'].name, negotiation_ctx['target'].name]
+                self.negotiation_history = negotiation_ctx['offer_history'] # This is a list of dicts
+
+                # Determine if it's this player's turn to negotiate and who the partner is
+                # This part depends on how catanAIGame.handle_negotiation passes control.
+                # We'll use the `is_negotiation_turn` and `negotiation_partner_name` passed to __init__.
+                if is_negotiation_turn:
+                    self.your_turn_to_negotiate = True
+                    self.negotiation_partner_name = negotiation_partner_name
 
         # Pick up feedback from player object if available (set by AIGame.py after an action)
         # These are read before other state construction that might depend on them (like available_actions if feedback was about a failed build)
@@ -242,14 +273,104 @@ class modelState():
         for port_entry in ports:
             port_entry["vertex_indices"].sort()
 
+        # --- Hex Control Calculation ---
+        # This needs player information, so it's better done after players_states are partially computed
+        # or by passing players_queue and pixel_to_vertex_index_map into this function.
+        # For now, I'll compute it here, assuming access to necessary player build data.
+        # This implies get_players_state might need to be called first or player data passed in.
+        # To keep it within get_board_state, it needs to iterate through all players.
+        # This is inefficient. A better design would be to calculate this in the main __init__ after both board and players are fetched.
+        # TEMP: For now, let's assume this will be refactored or player data is accessible.
+        # For this step, I will defer full hex_control to a post-processing step if players_queue is not available here.
+        # Let's assume for the plan that this calculation can access player settlement/city locations.
+        # For now, I'll just add a placeholder for hex_control in the hexes list.
+
+        # Add hex_control placeholder to each hex
+        for h_data in hexes:
+            h_data["hex_control"] = [] # Placeholder: list of {"player_name": "name", "influence": X}
+
+        # --- Choke Points (Simplified) ---
+        # Vertices adjacent to 3 hexes, listing their roll numbers.
+        choke_points_data = []
+        for v_coord, vertex_obj in board_obj.boardGraph.items():
+            if len(vertex_obj.adjacentHexList) == 3: # Typically, intersections are on 3 hexes
+                v_idx = pixel_to_vertex_index_map.get(v_coord)
+                if v_idx is not None:
+                    connected_hex_details = []
+                    is_valuable_choke = False
+                    high_prob_count = 0
+                    for h_idx_adj in vertex_obj.adjacentHexList:
+                        hex_tile_adj = board_obj.hexTileDict.get(h_idx_adj)
+                        if hex_tile_adj and hex_tile_adj.resource:
+                            roll_num = hex_tile_adj.resource.num if hex_tile_adj.resource.num is not None else 0
+                            connected_hex_details.append({
+                                "hex_index": h_idx_adj,
+                                "resource_type": hex_tile_adj.resource.type,
+                                "roll_number": roll_num
+                            })
+                            if roll_num in [6, 8, 5, 9]: # High probability numbers
+                                high_prob_count +=1
+                    if high_prob_count >= 2: # At least two high-probability hexes connected
+                        is_valuable_choke = True
+
+                    if is_valuable_choke: # Only add if it seems valuable
+                        choke_points_data.append({
+                            "vertex_index": v_idx,
+                            "connected_hexes": connected_hex_details
+                        })
+        choke_points_data = sorted(choke_points_data, key=lambda cp: cp["vertex_index"])
+
+
         return {
             "hexes": sorted(hexes, key=lambda h: h["hex_index"]), # Sort for consistency
             "ports": sorted(ports, key=lambda p: p["type"]), # Sort for consistency
-            "robber_location_hex_index": robber_location_hex_index
+            "robber_location_hex_index": robber_location_hex_index,
+            "choke_points": choke_points_data # Add choke points here
+            # "hex_control" will be added later or needs refactor
         }
 
-    def get_players_state(self, players_queue, current_player, board_obj):
+    # Helper method to calculate hex control, called from __init__ after basic board and player states are ready
+    def _calculate_hex_control(self, board_obj, players_list_of_dicts, pixel_to_vertex_index_map):
+        hex_control_map = {h_idx: [] for h_idx in board_obj.hexTileDict.keys()}
+
+        for p_state in players_list_of_dicts:
+            player_name = p_state["name"]
+            # Iterate through player's settlements
+            for s_v_idx in p_state["settlements_vertex_indices"]:
+                s_v_coord = board_obj.vertex_index_to_pixel_dict.get(s_v_idx)
+                if s_v_coord:
+                    vertex_obj = board_obj.boardGraph.get(s_v_coord)
+                    if vertex_obj:
+                        for h_idx in vertex_obj.adjacentHexList:
+                            # Check if player already listed for this hex, update influence or add new
+                            found_player_influence = next((inf for inf in hex_control_map.get(h_idx, []) if inf["player_name"] == player_name), None)
+                            if found_player_influence:
+                                found_player_influence["influence"] += 1
+                            elif h_idx in hex_control_map: # Ensure hex_idx is valid before appending
+                                hex_control_map[h_idx].append({"player_name": player_name, "influence": 1})
+            # Iterate through player's cities
+            for c_v_idx in p_state["cities_vertex_indices"]:
+                c_v_coord = board_obj.vertex_index_to_pixel_dict.get(c_v_idx)
+                if c_v_coord:
+                    vertex_obj = board_obj.boardGraph.get(c_v_coord)
+                    if vertex_obj:
+                        for h_idx in vertex_obj.adjacentHexList:
+                            found_player_influence = next((inf for inf in hex_control_map.get(h_idx, []) if inf["player_name"] == player_name), None)
+                            if found_player_influence:
+                                found_player_influence["influence"] += 2 # Cities have more influence
+                            elif h_idx in hex_control_map: # Ensure hex_idx is valid before appending
+                                hex_control_map[h_idx].append({"player_name": player_name, "influence": 2})
+
+        # Integrate this into self.board.hexes
+        for h_data in self.board["hexes"]:
+            h_idx = h_data["hex_index"]
+            if h_idx in hex_control_map:
+                h_data["hex_control"] = sorted(hex_control_map[h_idx], key=lambda x: (-x["influence"], x["player_name"]))
+
+
+    def get_players_state(self, catan_game, current_player, board_obj): # Changed players_queue to catan_game
         player_states = []
+        players_queue = catan_game.playerQueue.queue # Get queue from catan_game
         # Create a reverse mapping from pixel coordinates to vertex index for easier lookup if not already done
         pixel_to_vertex_index_map = {v_pixel: v_idx for v_idx, v_pixel in board_obj.vertex_index_to_pixel_dict.items()}
 
@@ -283,36 +404,86 @@ class modelState():
                 "threat_score": 0 # Will be calculated below
             })
 
-        # Calculate threat scores
+        # Calculate strategic overlays: resource_affinity, strategic_posture, and enhanced threat_level
         for player_state in player_states:
-            # Find the corresponding player object 'p' to get resource and dev card counts
-            # This is a bit inefficient but necessary if these counts aren't already in player_state
-            # For simplicity, I'll assume 'p' from the loop above is still in scope or re-fetch.
-            # Better: ensure all needed info is on 'p' when iterating 'players_queue'
-
-            # Re-iterate to find the original player object 'p' for detailed card counts for threat score
-            # This assumes player_states is in the same order as players_queue or names are unique and mapable.
-            # Given player_states is sorted by name, and players_queue might not be, direct indexing is risky.
-            # Let's find the player 'p' again by name from the original queue for accurate card counts.
-            original_player_object = next((player_obj for player_obj in list(players_queue) if player_obj.name == player_state["name"]), None)
+            original_player_object = next((p_obj for p_obj in list(players_queue) if p_obj.name == player_state["name"]), None)
 
             if original_player_object:
+                # 1. Resource Affinity (based on production potential from settlements/cities)
+                production_potential = {"WOOD": 0, "BRICK": 0, "SHEEP": 0, "WHEAT": 0, "ORE": 0}
+                player_buildings = [] # List of (vertex_coord, type_is_city=True/False)
+                for s_coord in original_player_object.buildGraph.get('SETTLEMENTS', []):
+                    player_buildings.append((s_coord, False))
+                for c_coord in original_player_object.buildGraph.get('CITIES', []):
+                    player_buildings.append((c_coord, True))
+
+                for v_coord, is_city in player_buildings:
+                    vertex_obj = board_obj.boardGraph.get(v_coord)
+                    if vertex_obj:
+                        for hex_idx in vertex_obj.adjacentHexList:
+                            hex_tile = board_obj.hexTileDict.get(hex_idx)
+                            if hex_tile and hex_tile.resource and hex_tile.resource.type != "DESERT":
+                                resource_type = hex_tile.resource.type
+                                production_potential[resource_type] += (2 if is_city else 1)
+
+                if sum(production_potential.values()) > 0:
+                    player_state["resource_affinity"] = max(production_potential, key=production_potential.get)
+                else:
+                    player_state["resource_affinity"] = "NONE"
+
+                # 2. Strategic Posture (simplified inference)
+                num_settlements = len(player_state["settlements_vertex_indices"])
+                num_cities = len(player_state["cities_vertex_indices"])
+                # road_length = original_player_object.maxRoadLength # Assuming player object has this
+                # For now, use number of road segments as a proxy if maxRoadLength isn't directly on player_state
+                road_segments_count = len(player_state["roads_vertex_indices_pairs"])
+
+
+                # dev_cards_bought = original_player_object.developmentCardsBought # If tracked
+                # Using knights_played and unrevealed dev cards as proxy
+                dev_cards_metric = player_state["knights_played"] + sum(player_state["dev_cards"].values())
+
+
+                postures = []
+                if num_cities > num_settlements / 2 and num_cities > 0: # More cities or significant cities
+                    postures.append("CITY_BUILDER")
+                if road_segments_count >= 5 : # Threshold for seeking longest road
+                    postures.append("LONGEST_ROAD_SEEKER")
+                if dev_cards_metric >= 2: # Actively using/buying dev cards
+                    postures.append("DEVELOPMENT_CARD_USER")
+                if num_settlements > num_cities and num_settlements >=3: # Expansionist
+                     postures.append("EXPANSIONIST")
+
+                if not postures and (num_settlements + num_cities) < 3 : postures.append("EARLY_DEVELOPMENT")
+                elif not postures: postures.append("BALANCED")
+
+                player_state["strategic_posture"] = ", ".join(postures) if postures else "UNDEFINED"
+
+
+                # 3. Enhanced Threat Level
                 vp = player_state["victory_points"]
                 knights = player_state["knights_played"]
-
-                # Number of resource cards
                 num_resource_cards = sum(original_player_object.resources.values())
+                num_dev_cards_unplayed = sum(player_state["dev_cards"].values()) # Already in player_state
 
-                # Number of hidden development cards (sum of values in the devCards dictionary)
-                num_dev_cards_unplayed = sum(original_player_object.devCards.values()) if hasattr(original_player_object, 'devCards') and isinstance(original_player_object.devCards, dict) else 0
+                base_threat = (vp * 3) + (knights * 1.5) + (road_segments_count * 0.2) + \
+                              ((num_resource_cards + num_dev_cards_unplayed) * 0.5)
 
-                # Calculate threat score: (VP * 3) + (Knights Played * 1) + (Total Cards * 0.5)
-                # We use visible VP for threat calculation.
-                threat = (vp * 3) + (knights * 1) + ((num_resource_cards + num_dev_cards_unplayed) * 0.5)
-                player_state["threat_score"] = round(threat, 1)
-            else:
-                # Fallback if original player object not found, though this shouldn't happen.
-                player_state["threat_score"] = player_state["victory_points"] * 3 # Simplified fallback
+                # Proximity to victory bonus (e.g. 10 points to win)
+                max_points_for_game = catan_game.maxPoints if hasattr(catan_game, 'maxPoints') else 10
+                if vp >= max_points_for_game - 2: # e.g. 8 or 9 points if max is 10
+                    base_threat += 5
+                elif vp >= max_points_for_game - 3: # e.g. 7 points if max is 10
+                    base_threat += 2
+
+                player_state["threat_level"] = round(base_threat, 1)
+                del player_state["threat_score"] # Remove old field if it was there (it's initialized to 0 now)
+
+            else: # Fallback if original_player_object not found
+                player_state["resource_affinity"] = "UNKNOWN"
+                player_state["strategic_posture"] = "UNKNOWN"
+                player_state["threat_level"] = player_state.get("victory_points",0) * 3
+
 
         return sorted(player_states, key=lambda ps: ps["name"]) # Sort for consistency
 
