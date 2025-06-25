@@ -243,7 +243,14 @@ You are an expert Settlers of Catan player.
 {persona_prompt_section}Here is the current game state:
 {game_state_json}
 
-{memory_prompt_section}{previous_action_feedback}{communication_instructions}{private_chat_instructions}{negotiation_instructions_text}{instructions}
+{memory_prompt_section}{previous_action_feedback}
+--- CRITICAL INSTRUCTIONS ---
+1. Your response MUST be a single valid JSON object that conforms to the required schema.
+2. The "action" you choose MUST be a valid move based on the "available_actions" provided in the game state.
+3. For any building action (settlement, road, city), the vertex or edge indices you provide in your action (e.g., "vertex_index") MUST be one of the integers or pairs listed in the corresponding array in "available_actions".
+4. DO NOT choose an index that is not explicitly listed in "available_actions" for the action type you are performing. Your primary guide for valid moves is the "available_actions" section.
+
+{communication_instructions}{private_chat_instructions}{negotiation_instructions_text}{instructions}
 {possible_actions}
 Refer to the 'available_actions' section within the game state JSON to see currently valid locations for building (if applicable to current phase).
 The 'action_costs' section lists the resource costs for standard building actions (if applicable).
