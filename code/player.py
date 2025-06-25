@@ -157,25 +157,27 @@ class player():
     def steal_resource(self, player_2):
         if(player_2 == None):
             print("No Player on this hex to Rob")
-            return
+            return None # Return None if no player or no resources to steal
         
         #Get all resources player 2 has in a list and use random list index to steal
-        p2_resources = []
+        p2_resources_list = []
         for resourceName, resourceAmount in player_2.resources.items():
-            p2_resources += [resourceName]*resourceAmount
+            p2_resources_list += [resourceName]*resourceAmount
 
-        resourceIndexToSteal = np.random.randint(0, len(p2_resources))
+        if not p2_resources_list: # Check if player_2 has any resources
+            print(f"Player {player_2.name} has no resources to steal.")
+            return None
 
         #Get a random permutation and steal a card
-        p2_resources = np.random.permutation(p2_resources)
-        resourceStolen = p2_resources[resourceIndexToSteal]
+        # Corrected to use the populated list directly for random choice
+        resourceStolen = np.random.choice(p2_resources_list)
         
         #Update resources of both players
         player_2.resources[resourceStolen] -= 1
         self.resources[resourceStolen] += 1
-        print("Stole 1 {} from Player {}".format(resourceStolen, player_2.name))
+        print(f"{self.name} stole 1 {resourceStolen} from Player {player_2.name}")
 
-        return
+        return resourceStolen # Return the stolen resource type
 
         
     #Function to calculate road length for longest road calculation
@@ -264,43 +266,44 @@ class player():
     #function to draw a Development Card
     def draw_devCard(self, board):
         'Draw a random dev card from stack and update self.devcards'
-        if(self.resources['WHEAT'] >= 1 and self.resources['ORE'] >= 1 and self.resources['SHEEP'] >= 1): #Check if player has resources available
-            #Get alldev cards available
-            devCardsToDraw = []
-            for cardName, cardAmount in board.devCardStack.items():
-                devCardsToDraw += [cardName]*cardAmount
-
-            #IF there are no devCards left
-            if(devCardsToDraw == []):
-                print("No Dev Cards Left!")
-                return
-
-            devCardIndex = np.random.randint(0, len(devCardsToDraw))
-
-            #Get a random permutation and draw a card
-            devCardsToDraw = np.random.permutation(devCardsToDraw)
-            cardDrawn = devCardsToDraw[devCardIndex]
-
-            #Update player resources
-            self.resources['ORE'] -= 1
-            self.resources['WHEAT'] -= 1
-            self.resources['SHEEP'] -= 1
-
-            #If card is a victory point apply immediately, else add to new card list
-            if(cardDrawn == 'VP'):
-                self.victoryPoints += 1
-                board.devCardStack[cardDrawn] -= 1
-                self.devCards[cardDrawn] += 1
-                self.visibleVictoryPoints = self.victoryPoints - self.devCards['VP']
-            
-            else:#Update player dev card and the stack
-                self.newDevCards.append(cardDrawn)
-                board.devCardStack[cardDrawn] -= 1
-            
-            print("{} drew a {} from Development Card Stack".format(self.name, cardDrawn))
-
-        else:
+        if not (self.resources['WHEAT'] >= 1 and self.resources['ORE'] >= 1 and self.resources['SHEEP'] >= 1): #Check if player has resources available
             print("Insufficient Resources for Dev Card. Cost: 1 ORE, 1 WHEAT, 1 SHEEP")
+            return False
+
+        #Get alldev cards available
+        devCardsToDraw = []
+        for cardName, cardAmount in board.devCardStack.items():
+            devCardsToDraw += [cardName]*cardAmount
+
+        #IF there are no devCards left
+        if(devCardsToDraw == []):
+            print("No Dev Cards Left!")
+            return False
+
+        devCardIndex = np.random.randint(0, len(devCardsToDraw)) # This line was already correctly indented
+
+        #Get a random permutation and draw a card
+        devCardsToDraw = np.random.permutation(devCardsToDraw) # Corrected indentation
+        cardDrawn = devCardsToDraw[devCardIndex]
+
+        #Update player resources
+        self.resources['ORE'] -= 1
+        self.resources['WHEAT'] -= 1
+        self.resources['SHEEP'] -= 1
+
+        #If card is a victory point apply immediately, else add to new card list
+        if(cardDrawn == 'VP'):
+            self.victoryPoints += 1
+            board.devCardStack[cardDrawn] -= 1
+            self.devCards[cardDrawn] += 1
+            self.visibleVictoryPoints = self.victoryPoints - self.devCards['VP']
+        
+        else:#Update player dev card and the stack
+            self.newDevCards.append(cardDrawn)
+            board.devCardStack[cardDrawn] -= 1
+        
+        print("{} drew a {} from Development Card Stack".format(self.name, cardDrawn))
+        return True
 
     #Function to update dev card stack with dev cards drawn from prior turn
     def updateDevCards(self):
@@ -547,4 +550,3 @@ class player():
         else:
             print("\nPlayer {} has {} cards and does not need to discard any cards!".format(self.name, totalResourceCount))
             return
-

@@ -151,14 +151,46 @@ class heuristicAIPlayer(player):
         '''Function to control heuristic AI robber
         Calls the choose_player_to_rob and move_robber functions
         args: board object
+        returns: player object that was robbed, or None
         '''
         #Get the best hex and player to rob
+        # Ensure that choose_player_to_rob can handle cases where no player can be robbed (e.g., returns None for playerRobbed)
         hex_i, playerRobbed = self.choose_player_to_rob(board)
 
-        #Move the robber
-        self.move_robber(hex_i, board, playerRobbed)
+        if hex_i is None : # choose_player_to_rob might return None if no valid spot/player
+            print(f"{self.name} (Heuristic) could not find a valid hex/player to rob.")
+            # Move robber to a default location if necessary, without robbing
+            # For now, assume if hex_i is None, playerRobbed is also None.
+            # Find first available hex that is not the current robber hex
+            current_robber_hex = None
+            for idx, tile in board.hexTileDict.items():
+                if tile.robber:
+                    current_robber_hex = idx
+                    break
 
-        return
+            default_hex_to_move = 0
+            if current_robber_hex is not None: # Move it somewhere else
+                for idx in board.hexTileDict.keys():
+                    if idx != current_robber_hex:
+                        default_hex_to_move = idx
+                        break
+
+            self.move_robber(default_hex_to_move, board, None) # Move robber without stealing
+            return None
+
+
+        #Move the robber; move_robber calls steal_resource which now returns the stolen resource or None
+        resource_stolen = self.move_robber(hex_i, board, playerRobbed)
+
+        if playerRobbed and resource_stolen:
+            print(f"{self.name} (Heuristic) successfully robbed {playerRobbed.name} of a {resource_stolen} at hex {hex_i}.")
+            return playerRobbed # Return the player object that was successfully robbed
+        elif playerRobbed:
+            print(f"{self.name} (Heuristic) moved robber to hex {hex_i} and targeted {playerRobbed.name}, but they had no resources.")
+            return None # Robbery attempted but failed due to no resources
+        else:
+            print(f"{self.name} (Heuristic) moved robber to hex {hex_i}, no player was robbed.")
+            return None # No player was targeted or robbery was not applicable
 
 
     # def heuristic_play_dev_card(self, board):
