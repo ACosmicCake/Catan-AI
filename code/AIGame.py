@@ -851,7 +851,7 @@ class catanAIGame():
 
             elif action_type == "end_negotiation":
                 reason = action.get("reason", "No reason given.")
-                self.current_negotiation.end_negotiation_by_player(current_llm_negotiator, reason, game_turn=numTurns_at_start + actions_taken_this_session)
+                self.current_negotiation.end_negotiation_by_player(current_llm_negotiator, game_turn=numTurns_at_start + actions_taken_this_session, reason=reason)
                 current_llm_negotiator.feedback_status_for_next_state = "info_negotiation_ended"
                 current_llm_negotiator.feedback_details_for_next_state = f"You ended negotiation with {other_llm_negotiator.name}."
                 other_llm_negotiator.feedback_status_for_next_state = "info_negotiation_ended_by_partner"
