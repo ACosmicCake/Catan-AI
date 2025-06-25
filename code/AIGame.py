@@ -4,9 +4,11 @@
 from board import *
 from gameView import *
 from player import *
-from heuristicAIPlayer import * # Keep for potential mixed games or fallback
-from modelState import modelState # Should already be there
-from LLMPlayer import LLMPlayer # Add this import
+from heuristicAIPlayer import *
+from modelState import modelState
+from LLMPlayer import LLMPlayer
+from negotiation import NegotiationManager
+from gamelogic import GameLogicManager # Added import
 import queue
 import numpy as np
 import sys, pygame
@@ -27,20 +29,6 @@ class catanAIGame():
         self.maxPoints = 10
         self.numPlayers = 0
 
-        # Chat histories
-        self.global_chat_history = []
-        self.private_chat_histories = {} # Key: tuple(sorted_player_names), Value: list of messages
-        self.communication_phase_active = False # Flag to manage new game loop state
-        self.active_private_chat_participants = None # Tuple (player1_name, player2_name) or None
-
-        # Negotiation state variables
-        self.negotiation_active = False
-        self.negotiation_context = {} # Stores {'initiator': player_obj, 'target': player_obj, 'offer_history': [initial_offer]}
-
-        #Dictionary to keep track of dice statistics
-        self.diceStats = {2:0, 3:0, 4:0, 5:0, 6:0, 7:0, 8:0, 9:0, 10:0, 11:0, 12:0}
-        self.diceStats_list = []
-
         while(self.numPlayers not in [3,4]): #Only accept 3 and 4 player games
             try:
                 self.numPlayers = int(input("Enter Number of Players (3 or 4):"))
@@ -50,17 +38,36 @@ class catanAIGame():
         print("Initializing game with {} players...".format(self.numPlayers))
         print("Note that Player 1 goes first, Player 2 second and so forth.")
         
-        #Initialize blank player queue and initial set up of roads + settlements
+        #Initialize blank player queue
         self.playerQueue = queue.Queue(self.numPlayers)
         self.gameSetup = True #Boolean to take care of setup phase
-        # self.robber_action_pending = False # Old flag, remove or ensure it's removed
         self.player_to_move_robber = None # New flag: stores the player object
+
+        # Chat histories
+        self.global_chat_history = []
+        self.private_chat_histories = {}
+        self.communication_phase_active = False
+        self.active_private_chat_participants = None
+
+        # Negotiation Manager
+        self.current_negotiation = None
+
+        # Reputation System
+        self.reputation = {}
+
+        #Dictionary to keep track of dice statistics
+        self.diceStats = {roll: 0 for roll in range(2, 13)}
+        self.diceStats_list = []
+
+        #Initialize GameLogicManager
+        # Pass a lambda that can be called to get the current player list from the queue
+        self.gameLogic = GameLogicManager(self.board, lambda: list(self.playerQueue.queue))
 
         #Initialize boardview object
         self.boardView = catanGameView(self.board, self)
 
-        #Functiont to go through initial set up
-        self.build_initial_settlements()
+        #Function to go through initial set up
+        self.build_initial_settlements() # This will populate playerQueue
         self.playCatan()
 
         #Plot diceStats histogram
@@ -150,6 +157,16 @@ class catanAIGame():
         # Add players to the queue (original order for first setup round)
         for p in created_players:
             self.playerQueue.put(p)
+
+        # Initialize reputation scores for all player pairs to 0
+        player_names = [p.name for p in created_players]
+        for p1_name in player_names:
+            self.reputation[p1_name] = {}
+            for p2_name in player_names:
+                if p1_name != p2_name:
+                    self.reputation[p1_name][p2_name] = 0
+        print(f"Initialized Reputation Matrix: {self.reputation}")
+
 
         playerList = list(self.playerQueue.queue) # Now correctly refers to players from the queue
 
@@ -483,37 +500,19 @@ class catanAIGame():
         print(f"{player_obj.name} (random fallback) built road from {v1_coord} to {v2_coord}.")
 
 
-    #Function to roll dice 
-    def rollDice(self):
-        dice_1 = np.random.randint(1,7)
-        dice_2 = np.random.randint(1,7)
-        diceRoll = dice_1 + dice_2
-        print("Dice Roll = ", diceRoll, "{", dice_1, dice_2, "}")
+    #Function to roll dice - Now uses GameLogicManager
+    # def rollDice(self):
+    #     dice_1 = np.random.randint(1,7)
+    #     dice_2 = np.random.randint(1,7)
+    #     diceRoll = dice_1 + dice_2
+    #     print("Dice Roll = ", diceRoll, "{", dice_1, dice_2, "}")
 
-        return diceRoll
+    #     return diceRoll
 
     #Function to update resources for all players
     def update_playerResources(self, diceRoll, currentPlayer):
         if diceRoll != 7: # Collect resources if not a 7
-            # ... (existing resource collection logic - no changes here) ...
-            hexResourcesRolled = self.board.getHexResourceRolled(diceRoll)
-            for player_i in list(self.playerQueue.queue):
-                for settlementCoord in player_i.buildGraph['SETTLEMENTS']:
-                    for adjacentHex in self.board.boardGraph[settlementCoord].adjacentHexList:
-                        if(adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].robber == False):
-                            resourceGenerated = self.board.hexTileDict[adjacentHex].resource.type
-                            player_i.resources[resourceGenerated] += 1
-                            print(f"{player_i.name} collects 1 {resourceGenerated} from Settlement")
-                for cityCoord in player_i.buildGraph['CITIES']:
-                    for adjacentHex in self.board.boardGraph[cityCoord].adjacentHexList:
-                        if(adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].robber == False):
-                            resourceGenerated = self.board.hexTileDict[adjacentHex].resource.type
-                            player_i.resources[resourceGenerated] += 2
-                            print(f"{player_i.name} collects 2 {resourceGenerated} from City")
-                # Display player info (optional here, maybe more suitable in playCatan after all actions)
-                # print(f"Player:{player_i.name}, Resources:{player_i.resources}, Points: {player_i.victoryPoints}")
-                # print(f"MaxRoadLength:{player_i.maxRoadLength}, Longest Road:{player_i.longestRoadFlag}\n")
-
+            self.gameLogic.distribute_resources(diceRoll) # Use GameLogicManager
         else: # Dice roll is 7
             print("---------------------------------------------------------------------------")
             print("Dice roll is 7! Robber activates. Players with >7 cards must discard.")
@@ -543,49 +542,49 @@ class catanAIGame():
                 self.player_to_move_robber = None
 
 
-    #function to check if a player has the longest road - after building latest road
-    def check_longest_road(self, player_i):
-        if(player_i.maxRoadLength >= 5): #Only eligible if road length is at least 5
-            longestRoad = True
-            for p in list(self.playerQueue.queue):
-                if(p.maxRoadLength >= player_i.maxRoadLength and p != player_i): #Check if any other players have a longer road
-                    longestRoad = False
+    #function to check if a player has the longest road - Now uses GameLogicManager
+    # def check_longest_road(self, player_i):
+    #     if(player_i.maxRoadLength >= 5): #Only eligible if road length is at least 5
+    #         longestRoad = True
+    #         for p in list(self.playerQueue.queue):
+    #             if(p.maxRoadLength >= player_i.maxRoadLength and p != player_i): #Check if any other players have a longer road
+    #                 longestRoad = False
             
-            if(longestRoad and player_i.longestRoadFlag == False): #if player_i takes longest road and didn't already have longest road
-                #Set previous players flag to false and give player_i the longest road points
-                prevPlayer = ''
-                for p in list(self.playerQueue.queue):
-                    if(p.longestRoadFlag):
-                        p.longestRoadFlag = False
-                        p.victoryPoints -= 2
-                        prevPlayer = 'from Player ' + p.name
+    #         if(longestRoad and player_i.longestRoadFlag == False): #if player_i takes longest road and didn't already have longest road
+    #             #Set previous players flag to false and give player_i the longest road points
+    #             prevPlayer = ''
+    #             for p in list(self.playerQueue.queue):
+    #                 if(p.longestRoadFlag):
+    #                     p.longestRoadFlag = False
+    #                     p.victoryPoints -= 2
+    #                     prevPlayer = 'from Player ' + p.name
     
-                player_i.longestRoadFlag = True
-                player_i.victoryPoints += 2
+    #             player_i.longestRoadFlag = True
+    #             player_i.victoryPoints += 2
 
-                print("Player {} takes Longest Road {}".format(player_i.name, prevPlayer))
+    #             print("Player {} takes Longest Road {}".format(player_i.name, prevPlayer))
 
-    #function to check if a player has the largest army - after playing latest knight
-    def check_largest_army(self, player_i):
-        if(player_i.knightsPlayed >= 3): #Only eligible if at least 3 knights are player
-            largestArmy = True
-            for p in list(self.playerQueue.queue):
-                if(p.knightsPlayed >= player_i.knightsPlayed and p != player_i): #Check if any other players have more knights played
-                    largestArmy = False
+    #function to check if a player has the largest army - Now uses GameLogicManager
+    # def check_largest_army(self, player_i):
+    #     if(player_i.knightsPlayed >= 3): #Only eligible if at least 3 knights are player
+    #         largestArmy = True
+    #         for p in list(self.playerQueue.queue):
+    #             if(p.knightsPlayed >= player_i.knightsPlayed and p != player_i): #Check if any other players have more knights played
+    #                 largestArmy = False
             
-            if(largestArmy and player_i.largestArmyFlag == False): #if player_i takes largest army and didn't already have it
-                #Set previous players flag to false and give player_i the largest points
-                prevPlayer = ''
-                for p in list(self.playerQueue.queue):
-                    if(p.largestArmyFlag):
-                        p.largestArmyFlag = False
-                        p.victoryPoints -= 2
-                        prevPlayer = 'from Player ' + p.name
+    #         if(largestArmy and player_i.largestArmyFlag == False): #if player_i takes largest army and didn't already have it
+    #             #Set previous players flag to false and give player_i the largest points
+    #             prevPlayer = ''
+    #             for p in list(self.playerQueue.queue):
+    #                 if(p.largestArmyFlag):
+    #                     p.largestArmyFlag = False
+    #                     p.victoryPoints -= 2
+    #                     prevPlayer = 'from Player ' + p.name
     
-                player_i.largestArmyFlag = True
-                player_i.victoryPoints += 2
+    #             player_i.largestArmyFlag = True
+    #             player_i.victoryPoints += 2
 
-                print("Player {} takes Largest Army {}".format(player_i.name, prevPlayer))
+    #             print("Player {} takes Largest Army {}".format(player_i.name, prevPlayer))
 
 
 
@@ -678,7 +677,10 @@ class catanAIGame():
         else:
             print(f"Robber randomly moved to hex {target_hex_idx}, no one to rob there.")
 
-        player_who_moves_robber.move_robber(target_hex_idx, self.board, player_to_rob_obj)
+        outcome = player_who_moves_robber.move_robber(target_hex_idx, self.board, player_to_rob_obj)
+        if player_to_rob_obj and outcome: # Successfully robbed
+            self.update_reputation(player_who_moves_robber.name, player_to_rob_obj.name, -3)
+        # No reputation change if no one was robbed or target had no resources
 
     def handle_private_chat(self, initiator, recipient, opening_message):
         self.active_private_chat_participants = tuple(sorted((initiator.name, recipient.name)))
@@ -739,223 +741,173 @@ class catanAIGame():
 
     def handle_negotiation(self, initiator_player, target_player, numTurns_at_start):
         """
-        Manages the negotiation loop between two players.
-        The initial offer is already in self.negotiation_context.
+        Manages the negotiation loop between two players using NegotiationManager.
         """
-        print(f"--- Negotiation Started between {initiator_player.name} and {target_player.name} ---")
-        max_negotiation_rounds = 3 # Max rounds of counter-offers (e.g., P1 offer, P2 counter, P1 counter, P2 counter, P1 counter, P2 final decision)
-                                   # This means up to 2 counter-offers from each player after initial.
-                                   # Total offers in history can be 1 (initial) + 2*max_negotiation_rounds = 7 if it goes full length.
+        if not self.current_negotiation or not self.current_negotiation.is_active():
+            print("Error: No active negotiation to handle.")
+            return False
 
-        # The first offer is already in self.negotiation_context['offer_history']
-        # The target player gets to respond first to the initial offer.
-        current_negotiator = target_player
-        other_negotiator = initiator_player
+        print(f"--- Negotiation Resumed with {self.current_negotiation.active_negotiator.name} ---")
+        max_negotiation_actions = 6 # Max total actions (offers/counters/accept/reject) in a negotiation session
+        actions_taken_this_session = 0
 
-        negotiation_accepted = False
-        negotiation_ended_by_player = False
+        while self.current_negotiation.is_active() and actions_taken_this_session < max_negotiation_actions:
+            current_llm_negotiator = self.current_negotiation.active_negotiator
+            other_llm_negotiator = self.current_negotiation.initiator if current_llm_negotiator == self.current_negotiation.target else self.current_negotiation.target
 
-        for round_num in range(max_negotiation_rounds * 2): # Each player gets 'max_negotiation_rounds' chances to counter or act
-            print(f"Negotiation Round {len(self.negotiation_context['offer_history'])} (Overall turn {round_num + 1}): {current_negotiator.name}'s turn to respond/counter.")
+            actions_taken_this_session +=1
+            print(f"Negotiation Action {actions_taken_this_session}: {current_llm_negotiator.name}'s turn.")
 
-            # Generate modelState for the current negotiator
-            # modelState needs to know it's a negotiation turn and who the partner is.
-            negotiation_state = modelState(self, current_negotiator,
-                                           is_negotiation_turn=True,
-                                           negotiation_partner_name=other_negotiator.name)
+            # modelState will now use self.current_negotiation.get_context_for_player()
+            negotiation_model_state = modelState(self, current_llm_negotiator)
+                                           # is_negotiation_turn=True, # No longer needed directly for modelState
+                                           # negotiation_partner_name=other_llm_negotiator.name) # No longer needed
 
-            action = current_negotiator.get_llm_move(negotiation_state)
+            action = current_llm_negotiator.get_llm_move(negotiation_model_state)
             action_type = action.get("type")
-            print(f"{current_negotiator.name} (Negotiation Thoughts: {current_negotiator.thoughts}) -> Action: {action}")
+            print(f"{current_llm_negotiator.name} (Negotiation Thoughts: {current_llm_negotiator.thoughts}) -> Action: {action}")
 
             if action_type == "accept_trade":
-                # Validate if the current_negotiator can fulfill their part of the *last* offer
-                # The last offer in history is the one being accepted.
-                last_offer = self.negotiation_context['offer_history'][-1]
+                last_offer = self.current_negotiation.get_last_offer()
+                if not last_offer:
+                    print(f"Error: {current_llm_negotiator.name} tried to accept, but no valid last offer found in history.")
+                    current_llm_negotiator.feedback_status_for_next_state = "error_negotiation_no_offer_to_accept"
+                    current_llm_negotiator.feedback_details_for_next_state = "There was no valid previous offer to accept."
+                    self.current_negotiation.end_negotiation_by_system("Error: Tried to accept non-existent offer.", game_turn=numTurns_at_start + actions_taken_this_session)
+                    break
 
-                resources_they_give = {} # What current_negotiator (acceptor) gives
-                resources_they_receive = {} # What current_negotiator (acceptor) receives
+                # Determine who gives what based on the last_offer
+                # current_llm_negotiator is the one accepting.
+                # The player who made the last_offer is last_offer['from_player']
+                proposer_of_last_offer = self._get_player_by_name(last_offer['from_player'])
 
-                if last_offer['from_player'] == current_negotiator.name: # Current negotiator made the last offer, other player accepted
-                    # This case should ideally not happen if accept_trade is from responder.
-                    # If it does, it means current_negotiator is accepting their own last offer, which is odd.
-                    # For now, let's assume accept_trade is always in response to partner's offer.
-                    # So, last_offer['from_player'] should be other_negotiator.name
-                    print(f"Error: {current_negotiator.name} trying to accept an offer they made. This path needs review.")
-                    current_negotiator.feedback_status_for_next_state = "error_invalid_action"
-                    current_negotiator.feedback_details_for_next_state = "Cannot accept an offer you proposed. This is for responding to partner's offer."
-                    # To prevent loop error, treat as end_negotiation for now
-                    action_type = "end_negotiation" # Force end
-                    action['reason'] = "Tried to accept own offer."
+                resources_acceptor_gives = last_offer.get('resources_requested', {}) # What acceptor (current_llm_negotiator) gives
+                resources_acceptor_receives = last_offer.get('resources_offered', {})   # What acceptor receives
 
-
-                else: # last_offer['from_player'] == other_negotiator.name (usual case)
-                    resources_they_give = last_offer.get('resources_requested', {}) # Acceptor gives what was requested from them
-                    resources_they_receive = last_offer.get('resources_offered', {}) # Acceptor receives what was offered to them
-
-                can_acceptor_give = all(current_negotiator.resources.get(res, 0) >= count for res, count in resources_they_give.items())
-                # Proposer's ability to give was checked at initial proposal, and for counter-offers below.
-                # We should re-verify proposer (other_negotiator) can still fulfill their part.
-                can_proposer_give = all(other_negotiator.resources.get(res, 0) >= count for res, count in resources_they_receive.items())
-
+                can_acceptor_give = all(current_llm_negotiator.resources.get(res, 0) >= count for res, count in resources_acceptor_gives.items())
+                can_proposer_give = all(proposer_of_last_offer.resources.get(res, 0) >= count for res, count in resources_acceptor_receives.items())
 
                 if can_acceptor_give and can_proposer_give:
-                    # Execute trade
-                    for res, count in resources_they_give.items():
-                        current_negotiator.resources[res] -= count
-                        other_negotiator.resources[res] += count
-                    for res, count in resources_they_receive.items():
-                        other_negotiator.resources[res] -= count
-                        current_negotiator.resources[res] += count
+                    if self.current_negotiation.accept_offer(current_llm_negotiator, game_turn=numTurns_at_start + actions_taken_this_session):
+                        # Execute trade
+                        for res, count in resources_acceptor_gives.items():
+                            current_llm_negotiator.resources[res] -= count
+                            proposer_of_last_offer.resources[res] += count
+                        for res, count in resources_acceptor_receives.items():
+                            proposer_of_last_offer.resources[res] -= count
+                            current_llm_negotiator.resources[res] += count
 
-                    print(f"Trade Accepted! Offer: {last_offer}")
-                    print(f"{current_negotiator.name} resources: {current_negotiator.resources}")
-                    print(f"{other_negotiator.name} resources: {other_negotiator.resources}")
+                        print(f"Trade Accepted & Executed! Offer: {last_offer}")
+                        print(f"{current_llm_negotiator.name} resources: {current_llm_negotiator.resources}")
+                        print(f"{proposer_of_last_offer.name} resources: {proposer_of_last_offer.resources}")
 
-                    negotiation_accepted = True
-                    # Feedback for both players
-                    current_negotiator.feedback_status_for_next_state = "success_trade_accepted"
-                    current_negotiator.feedback_details_for_next_state = f"You accepted the trade with {other_negotiator.name}."
-                    other_negotiator.feedback_status_for_next_state = "success_trade_accepted"
-                    other_negotiator.feedback_details_for_next_state = f"Your trade offer was accepted by {current_negotiator.name}."
-                    break # Exit negotiation loop
+                        # Update reputation for accepted trade
+                        self.update_reputation(current_llm_negotiator.name, proposer_of_last_offer.name, 2)
+                        self.update_reputation(proposer_of_last_offer.name, current_llm_negotiator.name, 2)
+
+                        current_llm_negotiator.feedback_status_for_next_state = "success_trade_accepted"
+                        current_llm_negotiator.feedback_details_for_next_state = f"You accepted the trade with {proposer_of_last_offer.name}."
+                        proposer_of_last_offer.feedback_status_for_next_state = "success_trade_accepted_by_partner"
+                        proposer_of_last_offer.feedback_details_for_next_state = f"Your trade offer was accepted by {current_llm_negotiator.name}."
+                    # NegotiationManager handles state change to ACCEPTED, loop will terminate.
                 else:
                     error_msg = "Trade acceptance failed due to insufficient resources. "
-                    if not can_acceptor_give:
-                         error_msg += f"{current_negotiator.name} cannot fulfill their part. "
-                         current_negotiator.feedback_status_for_next_state = "error_insufficient_resources"
-                         current_negotiator.feedback_details_for_next_state = "You tried to accept a trade but lacked your part of resources."
-                    if not can_proposer_give:
-                         error_msg += f"{other_negotiator.name} cannot fulfill their part. "
-                         # Feedback for other_negotiator will be set if they get another turn, or before main game resumes for them.
-                         # For now, the current_negotiator gets the primary feedback.
-                         if current_negotiator.feedback_status_for_next_state is None: # Avoid overwriting previous specific feedback
-                            current_negotiator.feedback_status_for_next_state = "error_trade_partner_insufficient_resources"
-                            current_negotiator.feedback_details_for_next_state = f"You tried to accept, but {other_negotiator.name} could not fulfill their part."
-
-
-                    print(error_msg + "Trade cannot proceed. Negotiation continues or ends.")
-                    # This implicitly becomes a rejection of this specific offer.
-                    # The player might choose to end_negotiation or counter in a subsequent implicit step if the loop continues.
-                    # For clarity, let's treat this failed acceptance as an implicit "end_negotiation" for this offer,
-                    # but allow the loop to continue for a new counter or explicit end.
-                    # Add a "system message" to history?
-                    system_message = {
-                        "type": "system_message",
-                        "player": "GameSystem",
-                        "message": f"Attempt to accept last offer failed due to resource check. Offer was: {last_offer}. Error: {error_msg}",
-                        "turn": len(self.negotiation_context['offer_history']) # Or game turn
-                    }
-                    self.negotiation_context['offer_history'].append(system_message)
-                    # No break here, let player decide next action or loop terminate by rounds.
+                    # ... (feedback setting as before) ...
+                    current_llm_negotiator.feedback_status_for_next_state = "error_accept_trade_failed_resources"
+                    current_llm_negotiator.feedback_details_for_next_state = error_msg + " Your attempt to accept has been logged as a rejection of this offer."
+                    # Treat as implicit rejection for this offer, allow negotiation to continue or be ended by LLM.
+                    # The NegotiationManager itself doesn't auto-reject on failed validation here, AIGame does.
+                    # For simplicity, let's have the game inform the manager it's a rejection due to this.
+                    self.current_negotiation.reject_offer(current_llm_negotiator, f"System rejection: resource check failed for acceptance. Details: {error_msg}", game_turn=numTurns_at_start + actions_taken_this_session)
+                    # This will change state to REJECTED and loop will end.
 
             elif action_type == "propose_counter_offer":
-                offered_by_current = action.get("resources_offered", {})
-                requested_from_partner = action.get("resources_requested", {})
+                offered_by_llm = action.get("resources_offered", {})
+                requested_from_partner_llm = action.get("resources_requested", {})
+                can_llm_offer = all(current_llm_negotiator.resources.get(res,0) >= count for res, count in offered_by_llm.items())
 
-                # Validate current negotiator can afford what they are offering
-                can_current_offer = all(current_negotiator.resources.get(res, 0) >= count for res, count in offered_by_current.items())
-
-                if not offered_by_current or not requested_from_partner: # Basic check for content
-                    print(f"{current_negotiator.name} made an invalid counter-offer (missing details). Ending negotiation.")
-                    current_negotiator.feedback_status_for_next_state = "error_invalid_input"
-                    current_negotiator.feedback_details_for_next_state = "Your counter-offer was invalid (e.g. missing offered/requested resources). Negotiation ended."
-                    negotiation_ended_by_player = True # Or system due to error
-                    break
-                elif not can_current_offer:
-                    print(f"{current_negotiator.name} proposed a counter-offer they cannot afford. Ending negotiation.")
-                    current_negotiator.feedback_status_for_next_state = "error_insufficient_resources"
-                    current_negotiator.feedback_details_for_next_state = "Your counter-offer proposed resources you don't have. Negotiation ended."
-                    negotiation_ended_by_player = True # Or system due to error
-                    break
+                if not offered_by_llm or not requested_from_partner_llm:
+                    current_llm_negotiator.feedback_status_for_next_state = "error_invalid_counter_offer"
+                    current_llm_negotiator.feedback_details_for_next_state = "Counter-offer was invalid (missing details)."
+                    self.current_negotiation.end_negotiation_by_system("Invalid counter-offer (missing details)", game_turn=numTurns_at_start + actions_taken_this_session)
+                elif not can_llm_offer:
+                    current_llm_negotiator.feedback_status_for_next_state = "error_counter_offer_insufficient_resources"
+                    current_llm_negotiator.feedback_details_for_next_state = "You cannot afford your counter-offer."
+                    self.current_negotiation.end_negotiation_by_system("Counter-offer resources unaffordable", game_turn=numTurns_at_start + actions_taken_this_session)
                 else:
-                    new_offer_details = {
-                        "from_player": current_negotiator.name,
-                        "to_player": other_negotiator.name,
-                        "resources_offered": offered_by_current,
-                        "resources_requested": requested_from_partner,
-                        "turn": len(self.negotiation_context['offer_history']) # Or use numTurns_at_start + internal counter
+                    counter_offer_obj = {
+                        "from_player": current_llm_negotiator.name, "to_player": other_llm_negotiator.name,
+                        "resources_offered": offered_by_llm, "resources_requested": requested_from_partner_llm,
+                        "turn": numTurns_at_start + actions_taken_this_session, "type": "counter_offer"
                     }
-                    self.negotiation_context['offer_history'].append(new_offer_details)
-                    print(f"{current_negotiator.name} countered. New offer: {new_offer_details}")
-                    current_negotiator.feedback_status_for_next_state = "success_counter_offer_proposed"
-                    current_negotiator.feedback_details_for_next_state = f"You proposed a counter-offer to {other_negotiator.name}."
-                    # Switch turns
-                    current_negotiator, other_negotiator = other_negotiator, current_negotiator
+                    if self.current_negotiation.add_counter_offer(current_llm_negotiator, counter_offer_obj, game_turn=numTurns_at_start + actions_taken_this_session):
+                        current_llm_negotiator.feedback_status_for_next_state = "success_counter_offer_proposed"
+                        current_llm_negotiator.feedback_details_for_next_state = f"Counter-offer proposed to {other_llm_negotiator.name}."
+                        # active_negotiator is switched by manager
+                    else: # Should not happen if logic is correct
+                        current_llm_negotiator.feedback_status_for_next_state = "error_counter_offer_failed_manager"
+                        current_llm_negotiator.feedback_details_for_next_state = "Failed to register counter-offer with NegotiationManager."
+                        self.current_negotiation.end_negotiation_by_system("Manager failed to add counter", game_turn=numTurns_at_start + actions_taken_this_session)
 
             elif action_type == "end_negotiation":
                 reason = action.get("reason", "No reason given.")
-                print(f"{current_negotiator.name} ended the negotiation. Reason: {reason}")
-                self.negotiation_context['offer_history'].append({
-                    "type": "end_negotiation_action",
-                    "player": current_negotiator.name,
-                    "reason": reason,
-                    "turn": len(self.negotiation_context['offer_history'])
-                })
-                current_negotiator.feedback_status_for_next_state = "info_negotiation_ended"
-                current_negotiator.feedback_details_for_next_state = f"You ended the negotiation with {other_negotiator.name}."
-                other_negotiator.feedback_status_for_next_state = "info_negotiation_ended_by_partner"
-                other_negotiator.feedback_details_for_next_state = f"{current_negotiator.name} ended the negotiation with you."
-                negotiation_ended_by_player = True
-                break # Exit negotiation loop
+                self.current_negotiation.end_negotiation_by_player(current_llm_negotiator, reason, game_turn=numTurns_at_start + actions_taken_this_session)
+                current_llm_negotiator.feedback_status_for_next_state = "info_negotiation_ended"
+                current_llm_negotiator.feedback_details_for_next_state = f"You ended negotiation with {other_llm_negotiator.name}."
+                other_llm_negotiator.feedback_status_for_next_state = "info_negotiation_ended_by_partner"
+                other_llm_negotiator.feedback_details_for_next_state = f"{current_llm_negotiator.name} ended negotiation with you."
+                # Loop will terminate as is_active() becomes false.
 
-            else: # Invalid action from LLM during negotiation
-                print(f"Invalid action '{action_type}' from {current_negotiator.name} during negotiation. Ending negotiation.")
-                self.negotiation_context['offer_history'].append({
-                    "type": "system_error",
-                    "player": current_negotiator.name,
-                    "message": f"Invalid action type '{action_type}' received. Negotiation terminated by system.",
-                    "turn": len(self.negotiation_context['offer_history'])
-                })
-                current_negotiator.feedback_status_for_next_state = "error_invalid_action"
-                current_negotiator.feedback_details_for_next_state = f"Your action '{action_type}' was invalid during negotiation. Negotiation ended."
-                other_negotiator.feedback_status_for_next_state = "info_negotiation_ended_by_system"
-                other_negotiator.feedback_details_for_next_state = f"Negotiation with {current_negotiator.name} ended due to an invalid action from them."
-                negotiation_ended_by_player = True # Effectively ended by system/error
-                break
-
-            if len(self.negotiation_context['offer_history']) >= (1 + max_negotiation_rounds * 2) : # Initial offer + 2 per player
-                print("Negotiation reached maximum rounds. Ending negotiation.")
-                self.negotiation_context['offer_history'].append({
-                    "type": "system_message",
-                    "player": "GameSystem",
-                    "message": "Negotiation reached maximum rounds and has ended without acceptance.",
-                    "turn": len(self.negotiation_context['offer_history'])
-                })
-                # Feedback for both players if max rounds reached
-                current_negotiator.feedback_status_for_next_state = "info_negotiation_ended_max_rounds"
-                current_negotiator.feedback_details_for_next_state = "Negotiation ended due to reaching maximum rounds."
-                other_negotiator.feedback_status_for_next_state = "info_negotiation_ended_max_rounds"
-                other_negotiator.feedback_details_for_next_state = "Negotiation ended due to reaching maximum rounds."
-                break
+            else: # Invalid action
+                invalid_action_reason = f"Invalid action '{action_type}' during negotiation."
+                self.current_negotiation.end_negotiation_by_system(invalid_action_reason, game_turn=numTurns_at_start + actions_taken_this_session)
+                current_llm_negotiator.feedback_status_for_next_state = "error_invalid_action_in_negotiation"
+                current_llm_negotiator.feedback_details_for_next_state = invalid_action_reason
+                other_llm_negotiator.feedback_status_for_next_state = "info_negotiation_ended_by_system_error"
+                other_llm_negotiator.feedback_details_for_next_state = f"Negotiation with {current_llm_negotiator.name} ended due to their invalid action."
+                # Loop will terminate.
 
             self.boardView.displayGameScreen() # Update view after each negotiation step
-            pygame.time.delay(200) # Small delay
+            pygame.time.delay(200)
 
-        # --- Post-Negotiation Cleanup & Status ---
-        self.negotiation_active = False
-        if negotiation_accepted:
-            print(f"--- Negotiation Concluded: Trade Accepted between {initiator_player.name} and {target_player.name} ---")
-            # Feedback is already set on players
-        elif negotiation_ended_by_player:
-            print(f"--- Negotiation Concluded: Ended by Player ({current_negotiator.name if action_type != 'propose_counter_offer' else other_negotiator.name}) ---")
-             # Feedback is already set on players
-        else: # Max rounds reached or other non-acceptance end
-            print(f"--- Negotiation Concluded: No agreement reached between {initiator_player.name} and {target_player.name} (max rounds or other). ---")
-            # Ensure players who didn't get a final feedback in the loop get one if negotiation just timed out
-            if not initiator_player.feedback_status_for_next_state: # if it was target's turn when max rounds hit
-                initiator_player.feedback_status_for_next_state = "info_negotiation_ended_max_rounds"
-                initiator_player.feedback_details_for_next_state = "Negotiation ended due to reaching maximum rounds without acceptance."
-            if not target_player.feedback_status_for_next_state:
-                target_player.feedback_status_for_next_state = "info_negotiation_ended_max_rounds"
-                target_player.feedback_details_for_next_state = "Negotiation ended due to reaching maximum rounds without acceptance."
+            if not self.current_negotiation.is_active():
+                break # Exit if manager state changed to a non-active one
 
-        # self.negotiation_context can be cleared or archived here if needed.
-        # For now, leave it for potential review until next negotiation starts.
-        # Or, explicitly clear: self.negotiation_context = {}
+        # --- Post-Negotiation Session ---
+        if self.current_negotiation.is_active() and actions_taken_this_session >= max_negotiation_actions:
+            self.current_negotiation.end_negotiation_by_system("Max actions reached in session.", game_turn=numTurns_at_start + actions_taken_this_session)
+            # Feedback for players if max actions reached
+            self.current_negotiation.active_negotiator.feedback_status_for_next_state = "info_negotiation_ended_max_actions"
+            self.current_negotiation.active_negotiator.feedback_details_for_next_state = "Negotiation ended: max actions for session reached."
+            # Inform other player too
+            other_player = self.current_negotiation.initiator if self.current_negotiation.active_negotiator == self.current_negotiation.target else self.current_negotiation.target
+            other_player.feedback_status_for_next_state = "info_negotiation_ended_max_actions"
+            other_player.feedback_details_for_next_state = "Negotiation ended: max actions for session reached."
+
+
+        final_negotiation_state = self.current_negotiation.current_state
+        print(f"--- Negotiation Session Concluded. Final State: {final_negotiation_state} ---")
+
+        negotiation_was_successful = (final_negotiation_state == "ACCEPTED")
+
+        # Clear current_negotiation if it's no longer active (accepted, rejected, ended)
+        if not self.current_negotiation.is_active():
+            # Archive or log self.current_negotiation.history if needed
+            self.current_negotiation = None
+
         self.boardView.displayGameScreen()
-        return negotiation_accepted # Return status to playCatan
+        return negotiation_was_successful
 
+    def update_reputation(self, player1_name, player2_name, change):
+        """Updates reputation score between two players."""
+        if player1_name in self.reputation and player2_name in self.reputation[player1_name]:
+            self.reputation[player1_name][player2_name] += change
+            print(f"Reputation updated: {player1_name}'s rep with {player2_name} is now {self.reputation[player1_name][player2_name]}.")
+        else:
+            print(f"Warning: Could not update reputation. Player names not found in matrix: {player1_name}, {player2_name}")
+        # Symmetric change for player2's reputation with player1 could also be added if desired,
+        # but the spec implies one-way changes for some actions (e.g. robber).
+        # For accepted trade, it should be symmetric.
 
     #Function that runs the main game loop with all players and pieces
     def playCatan(self):
@@ -1010,9 +962,11 @@ class catanAIGame():
                 current_turn_last_action_error_details = None
 
                 pygame.event.pump()
-                diceNum = self.rollDice()
+                diceNum = self.gameLogic.roll_dice() # Use GameLogicManager
+                self.boardView.displayDiceRoll(diceNum) # Display dice roll on GUI if applicable
+
                 # update_playerResources now sets pending_discard_count on players and player_to_move_robber on self
-                self.update_playerResources(diceNum, currPlayer)
+                self.update_playerResources(diceNum, currPlayer) # update_playerResources now uses gameLogic.distribute_resources
                 self.diceStats[diceNum] += 1; self.diceStats_list.append(diceNum)
 
                 # --- Card Discarding Phase (if a 7 was rolled) ---
@@ -1075,77 +1029,147 @@ class catanAIGame():
                             player_name_to_rob = robber_action.get("player_to_rob_name")
                             player_to_rob_object = None
                             if player_name_to_rob: player_to_rob_object = self._get_player_by_name(player_name_to_rob)
+
                             if hex_idx is not None:
-                                currPlayer.move_robber(hex_idx, self.board, player_to_rob_object)
-                                print(f"{currPlayer.name} moved robber to hex {hex_idx}" + (f" and robbed {player_name_to_rob}" if player_name_to_rob else "."))
+                                # The move_robber method now calls steal_resource, which returns the stolen resource or None
+                                outcome = currPlayer.move_robber(hex_idx, self.board, player_to_rob_object) # player.py's move_robber calls steal_resource
+                                if player_to_rob_object and outcome: # If a player was specified and steal_resource returned a stolen item
+                                    print(f"{currPlayer.name} moved robber to hex {hex_idx} and robbed {player_name_to_rob}.")
+                                    self.update_reputation(currPlayer.name, player_to_rob_object.name, -3)
+                                elif player_to_rob_object and not outcome:
+                                    print(f"{currPlayer.name} moved robber to hex {hex_idx}, attempted to rob {player_name_to_rob} but they had no resources.")
+                                else: # No player to rob or other outcome
+                                    print(f"{currPlayer.name} moved robber to hex {hex_idx}.")
                                 executed_robber_move = True
-                        if not executed_robber_move:
-                            print(f"{currPlayer.name} (LLM) failed to provide valid 'move_robber' action. Randomly placing.")
+                            else:
+                                current_turn_last_action_status = "error_missing_input" # For feedback if this action fails
+                                current_turn_last_action_error_details = "Missing hex_index for move_robber."
+
+
+                        if not executed_robber_move: # Fallback if LLM action was invalid or move failed
+                            print(f"{currPlayer.name} (LLM) failed to provide valid 'move_robber' action or it failed. Randomly placing.")
+                            # _execute_random_robber_move itself calls move_robber, which calls steal_resource.
+                            # So, reputation update for fallback will be handled inside _execute_random_robber_move.
                             self._execute_random_robber_move(currPlayer)
 
                     elif isinstance(currPlayer, heuristicAIPlayer):
                         print(f"{currPlayer.name} (Heuristic) moving robber...")
-                        currPlayer.heuristic_move_robber(self.board) # Heuristic handles its robber move
+                        # Heuristic's choose_player_to_rob returns (hex_idx, player_to_rob_obj)
+                        # We need to capture that to update reputation.
+                        # This requires refactoring heuristic_move_robber or how it's called.
+                        # For now, let's assume heuristic_move_robber will internally call an update or we modify it later.
+                        # A simpler approach for now:
+                        original_robber_hex = self.board.robber_hex # Store before heuristic moves it
+                        player_robbed_by_heuristic = currPlayer.heuristic_move_robber(self.board) # Modify to return player_robbed
+                        if player_robbed_by_heuristic:
+                             self.update_reputation(currPlayer.name, player_robbed_by_heuristic.name, -3)
+
 
                     self.player_to_move_robber = None # Reset flag
                     self.boardView.displayGameScreen(); pygame.time.delay(300)
 
                 # --- Main Turn Actions ---
                 if isinstance(currPlayer, LLMPlayer):
-                    # ... (LLM main turn action logic as before) ...
                     print(f"{currPlayer.name} taking main turn actions...")
+                    actions_this_turn = 0
+                    max_actions_per_turn = 10 # Safety break for LLM action loop
 
-                    # Create modelState for the main turn. It will pick up any feedback from a *previous*
-                    # mandatory action (like discard/robber) within THIS turn, or from the player's PREVIOUS turn.
-                    # modelState itself will clear the feedback from currPlayer after reading it.
-                    state_for_main_turn = modelState(self, currPlayer, private_chat_active=False, communication_phase_active=False)
-                    action = currPlayer.get_llm_move(state_for_main_turn)
-                    print(f"{currPlayer.name} (Main Turn Thoughts: {currPlayer.thoughts}) -> Action: {action}")
+                    while actions_this_turn < max_actions_per_turn:
+                        actions_this_turn += 1
+                        # Create modelState for the current action. It picks up feedback from the *previous action in this turn*
+                        # or from mandatory actions (discard/robber) if this is the first action in the multi-action loop.
+                        state_for_current_action = modelState(self, currPlayer, private_chat_active=False, communication_phase_active=False)
+                        action = currPlayer.get_llm_move(state_for_current_action)
+                        print(f"{currPlayer.name} (Turn Action {actions_this_turn}, Thoughts: {currPlayer.thoughts}) -> Action: {action}")
 
-                    action_type = action.get("type")
-                    # Default feedback if action is not successfully processed or is an 'end_turn'
-                    current_turn_last_action_status = "no_action_taken"
-                    current_turn_last_action_error_details = "Player chose to end turn or action was not processed."
+                        action_type = action.get("type")
+                        current_turn_last_action_status = "no_action_taken" # Default for this specific action
+                        current_turn_last_action_error_details = "Action not processed or player ended turn."
 
-                    # Handle global message during main turn if chosen
-                    if action_type == "send_global_message":
-                        message = action.get("message")
-                        if message:
-                            print(f"[Global Chat | {currPlayer.name}]: {message}")
-                            self.global_chat_history.append({"player": currPlayer.name, "message": message})
-                            # Potentially get another action after sending a message, or end turn.
-                            # For now, sending a global message is a turn-ending action unless combined with others.
-                            # The current LLM prompt implies it's one of the main actions. Let's assume it's final for now.
-                            # Update: The prompt allows it as one of many. If it's chosen, we process and then player might do more.
-                            # This might need a loop or re-prompting if we want multiple actions per turn.
-                            # For simplicity, let's assume for now if send_global_message is the primary action, it's the only one processed here.
-                            # Re-evaluate if LLM is expected to do more after this.
-                            # If other actions are possible, this 'if' should not be an 'elif' chain.
-                            # Based on current structure, we process one main action.
+                        if action_type == "end_turn":
+                            current_turn_last_action_status = "success_end_turn"
+                            current_turn_last_action_error_details = "Player chose to end their turn."
+                            print(f"{currPlayer.name} ends their turn after {actions_this_turn-1} action(s).")
+                            currPlayer.feedback_status_for_next_state = current_turn_last_action_status
+                            currPlayer.feedback_details_for_next_state = current_turn_last_action_error_details
+                            break # Exit the multi-action while loop for this player's turn
 
-                    elif action_type == "initiate_private_chat":
-                        recipient_name = action.get("recipient_name")
-                        opening_message = action.get("opening_message")
-                        recipient_player = self._get_player_by_name(recipient_name)
-
-                        if recipient_player and isinstance(recipient_player, LLMPlayer) and recipient_player != currPlayer:
-                            if opening_message:
-                                print(f"{currPlayer.name} is starting a private chat with {recipient_name}.")
-                                self.handle_private_chat(currPlayer, recipient_player, opening_message)
+                        elif action_type == "send_global_message":
+                            message = action.get("message")
+                            if message:
+                                print(f"[Global Chat | {currPlayer.name}]: {message}")
+                                self.global_chat_history.append({"player": currPlayer.name, "message": message})
+                                current_turn_last_action_status = "success"
+                                current_turn_last_action_error_details = "Global message sent."
                             else:
-                                print(f"{currPlayer.name} tried to initiate chat with {recipient_name} but provided no opening message.")
-                        elif recipient_player == currPlayer:
-                            print(f"{currPlayer.name} tried to initiate chat with themselves. Action ignored.")
-                        elif not isinstance(recipient_player, LLMPlayer):
-                            print(f"{currPlayer.name} tried to initiate chat with {recipient_name}, but they are not an LLM player or cannot chat. Action ignored.")
-                        else:
-                            print(f"Player {recipient_name} not found for private chat initiated by {currPlayer.name}.")
-                        # After chat, turn effectively ends or continues based on handle_private_chat behavior.
-                        # For now, let's assume initiating a chat is the main action for the turn.
+                                current_turn_last_action_status = "error_missing_input"
+                                current_turn_last_action_error_details = "Send_global_message action had no message content."
 
-                    elif action_type == "build_road":
-                        v1_idx, v2_idx = action.get("v1_index"), action.get("v2_index")
-                        required_resources = state_for_main_turn.action_costs["build_road"]
+                        elif action_type == "initiate_private_chat":
+                            recipient_name = action.get("recipient_name")
+                            opening_message = action.get("opening_message")
+                            recipient_player = self._get_player_by_name(recipient_name)
+
+                            if recipient_player and isinstance(recipient_player, LLMPlayer) and recipient_player != currPlayer:
+                                if opening_message:
+                                    print(f"{currPlayer.name} is starting a private chat with {recipient_name}.")
+                                    self.handle_private_chat(currPlayer, recipient_player, opening_message)
+                                    current_turn_last_action_status = "success"
+                                    current_turn_last_action_error_details = f"Private chat with {recipient_name} was conducted."
+                                else:
+                                    current_turn_last_action_status = "error_missing_input"
+                                    current_turn_last_action_error_details = f"Tried to initiate chat with {recipient_name} but no opening message."
+                            elif recipient_player == currPlayer:
+                                current_turn_last_action_status = "error_invalid_target"
+                                current_turn_last_action_error_details = "Cannot initiate chat with oneself."
+                            elif not isinstance(recipient_player, LLMPlayer):
+                                current_turn_last_action_status = "error_invalid_target_type"
+                                current_turn_last_action_error_details = f"Cannot initiate chat with {recipient_name}, not an LLM player."
+                            else:
+                                current_turn_last_action_status = "error_invalid_target"
+                                current_turn_last_action_error_details = f"Player {recipient_name} not found for private chat."
+
+                        elif action_type == "offer_non_binding_deal":
+                            target_name = action.get("target_player_name")
+                            deal_desc = action.get("deal_description")
+                            if target_name and deal_desc:
+                                log_message = f"[Diplomacy | {currPlayer.name} to {target_name}]: Offers non-binding deal: \"{deal_desc}\"."
+                                print(log_message)
+                                self.global_chat_history.append({"player": currPlayer.name, "type": "diplomatic_offer", "target": target_name, "message": log_message})
+                                current_turn_last_action_status = "success_diplomatic_action_logged"
+                                current_turn_last_action_error_details = "Non-binding deal offer logged."
+                            else:
+                                current_turn_last_action_status = "error_missing_input_diplomacy"
+                                current_turn_last_action_error_details = "Missing target_player_name or deal_description for offer_non_binding_deal."
+
+                        elif action_type == "request_embargo":
+                            target_name = action.get("target_player_name")
+                            reason = action.get("reasoning")
+                            if target_name and reason:
+                                log_message = f"[Diplomacy | {currPlayer.name}]: Proposes an embargo against {target_name}. Reason: \"{reason}\"."
+                                print(log_message)
+                                self.global_chat_history.append({"player": currPlayer.name, "type": "diplomatic_embargo_request", "target": target_name, "message": log_message})
+                                current_turn_last_action_status = "success_diplomatic_action_logged"
+                                current_turn_last_action_error_details = "Embargo request logged."
+                            else:
+                                current_turn_last_action_status = "error_missing_input_diplomacy"
+                                current_turn_last_action_error_details = "Missing target_player_name or reasoning for request_embargo."
+
+                        elif action_type == "share_information":
+                            info = action.get("information")
+                            if info:
+                                log_message = f"[Diplomacy | {currPlayer.name}]: Shares information: \"{info}\"."
+                                print(log_message)
+                                self.global_chat_history.append({"player": currPlayer.name, "type": "diplomatic_info_share", "message": log_message})
+                                current_turn_last_action_status = "success_diplomatic_action_logged"
+                                current_turn_last_action_error_details = "Information shared and logged."
+                            else:
+                                current_turn_last_action_status = "error_missing_input_diplomacy"
+                                current_turn_last_action_error_details = "Missing information for share_information."
+
+                        elif action_type == "build_road":
+                            v1_idx, v2_idx = action.get("v1_index"), action.get("v2_index")
+                            required_resources = state_for_current_action.action_costs["build_road"]
                         can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
 
                         if v1_idx is None or v2_idx is None:
@@ -1161,20 +1185,20 @@ class catanAIGame():
                                 current_turn_last_action_status = "error_invalid_input"
                                 current_turn_last_action_error_details = f"Invalid vertex indices for build_road: {v1_idx}, {v2_idx}. They do not exist on board."
                             # Check if chosen road is in available_actions from the state the LLM used
-                            elif tuple(sorted((v1_idx, v2_idx))) not in state_for_main_turn.available_actions.get("build_road", []):
+                            elif tuple(sorted((v1_idx, v2_idx))) not in state_for_current_action.available_actions.get("build_road", []):
                                 current_turn_last_action_status = "error_invalid_placement"
-                                current_turn_last_action_error_details = f"Road from {v1_idx} to {v2_idx} is not a valid placement according to available_actions. Valid roads: {state_for_main_turn.available_actions.get('build_road', [])}."
+                                current_turn_last_action_error_details = f"Road from {v1_idx} to {v2_idx} is not a valid placement according to available_actions. Valid roads: {state_for_current_action.available_actions.get('build_road', [])}."
                             elif currPlayer.build_road(v1_coord, v2_coord, self.board): # player.build_road also checks resources again
-                                self.check_longest_road(currPlayer)
+                                self.gameLogic.check_longest_road(currPlayer) # Use GameLogicManager
                                 current_turn_last_action_status = "success"
                                 current_turn_last_action_error_details = f"Successfully built road from {v1_idx} to {v2_idx}."
                             else:
                                 current_turn_last_action_status = "error_rule_violation"
                                 current_turn_last_action_error_details = f"Failed to build road from {v1_idx} to {v2_idx}. Ensure it's connected and path is clear. Player.build_road returned false."
 
-                    elif action_type == "build_settlement":
-                        v_idx = action.get("vertex_index")
-                        required_resources = state_for_main_turn.action_costs["build_settlement"]
+                        elif action_type == "build_settlement":
+                            v_idx = action.get("vertex_index")
+                            required_resources = state_for_current_action.action_costs["build_settlement"]
                         can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
 
                         if v_idx is None:
@@ -1189,9 +1213,9 @@ class catanAIGame():
                             if not v_coord:
                                 current_turn_last_action_status = "error_invalid_input"
                                 current_turn_last_action_error_details = f"Invalid vertex index for build_settlement: {v_idx}. Does not exist on board."
-                            elif v_idx not in state_for_main_turn.available_actions.get("build_settlement", []):
+                            elif v_idx not in state_for_current_action.available_actions.get("build_settlement", []):
                                 current_turn_last_action_status = "error_invalid_placement"
-                                current_turn_last_action_error_details = f"Settlement at {v_idx} is not a valid placement. Valid locations: {state_for_main_turn.available_actions.get('build_settlement', [])}."
+                                current_turn_last_action_error_details = f"Settlement at {v_idx} is not a valid placement. Valid locations: {state_for_current_action.available_actions.get('build_settlement', [])}."
                             elif currPlayer.build_settlement(v_coord, self.board):
                                 current_turn_last_action_status = "success"
                                 current_turn_last_action_error_details = f"Successfully built settlement at {v_idx}."
@@ -1199,9 +1223,9 @@ class catanAIGame():
                                 current_turn_last_action_status = "error_rule_violation"
                                 current_turn_last_action_error_details = f"Failed to build settlement at {v_idx}. Check distance rules and existing structures. Player.build_settlement returned false."
 
-                    elif action_type == "build_city":
-                        v_idx = action.get("vertex_index")
-                        required_resources = state_for_main_turn.action_costs["build_city"]
+                        elif action_type == "build_city":
+                            v_idx = action.get("vertex_index")
+                            required_resources = state_for_current_action.action_costs["build_city"]
                         can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
 
                         if v_idx is None:
@@ -1216,9 +1240,9 @@ class catanAIGame():
                             if not v_coord:
                                 current_turn_last_action_status = "error_invalid_input"
                                 current_turn_last_action_error_details = f"Invalid vertex index for build_city: {v_idx}. Does not exist on board."
-                            elif v_idx not in state_for_main_turn.available_actions.get("build_city", []):
+                            elif v_idx not in state_for_current_action.available_actions.get("build_city", []):
                                 current_turn_last_action_status = "error_invalid_placement"
-                                current_turn_last_action_error_details = f"City at {v_idx} is not a valid placement (must be on existing settlement). Valid locations: {state_for_main_turn.available_actions.get('build_city', [])}."
+                                current_turn_last_action_error_details = f"City at {v_idx} is not a valid placement (must be on existing settlement). Valid locations: {state_for_current_action.available_actions.get('build_city', [])}."
                             elif currPlayer.build_city(v_coord, self.board): # Assumes player.build_city checks if it's a settlement of the player
                                 current_turn_last_action_status = "success"
                                 current_turn_last_action_error_details = f"Successfully built city at {v_idx}."
@@ -1226,8 +1250,8 @@ class catanAIGame():
                                 current_turn_last_action_status = "error_rule_violation"
                                 current_turn_last_action_error_details = f"Failed to build city at {v_idx}. Ensure you have a settlement there. Player.build_city returned false."
 
-                    elif action_type == "buy_development_card":
-                        required_resources = state_for_main_turn.action_costs["buy_development_card"]
+                        elif action_type == "buy_development_card":
+                            required_resources = state_for_current_action.action_costs["buy_development_card"]
                         can_afford = all(currPlayer.resources.get(res,0) >= count for res, count in required_resources.items())
                         if not self.board.devCardStack: # Check if deck is empty
                             current_turn_last_action_status = "error_no_dev_cards_left"
@@ -1243,175 +1267,132 @@ class catanAIGame():
                             current_turn_last_action_status = "error_unknown_failure"
                             current_turn_last_action_error_details = "Failed to buy development card for an unknown reason."
 
-                    elif action_type == "trade_with_bank":
-                        res_give, res_receive = action.get("resource_to_give", "").upper(), action.get("resource_to_receive", "").upper()
-                        res_types = ["WOOD", "BRICK", "SHEEP", "WHEAT", "ORE"]
-                        if not res_give or not res_receive or res_give not in res_types or res_receive not in res_types:
-                            current_turn_last_action_status = "error_invalid_input"
-                            current_turn_last_action_error_details = f"Invalid or missing resources for trade_with_bank. Got give:'{res_give}', receive:'{res_receive}'. Must be valid resource types."
-                        else:
-                            # Determine actual trade ratio for res_give
-                            ratio = 4
-                            if state_for_main_turn.current_player_bank_trade_ratios["has_general_3_to_1_port"]:
-                                ratio = 3
-                            if state_for_main_turn.current_player_bank_trade_ratios["specific_2_to_1_ports"].get(res_give):
-                                ratio = 2
-
-                            if currPlayer.resources.get(res_give, 0) < ratio:
-                                current_turn_last_action_status = "error_insufficient_resources"
-                                current_turn_last_action_error_details = f"Cannot trade with bank: Insufficient {res_give}. You have {currPlayer.resources.get(res_give, 0)}, need {ratio} for 1 {res_receive}."
-                            elif currPlayer.trade_with_bank(res_give, res_receive): # player.trade_with_bank should use the correct ratio
-                                current_turn_last_action_status = "success"
-                                current_turn_last_action_error_details = f"Successfully traded {ratio} {res_give} for 1 {res_receive} with the bank."
-                            else: # player.trade_with_bank returned false
-                                current_turn_last_action_status = "error_unknown_failure"
-                                current_turn_last_action_error_details = f"Bank trade of {res_give} for {res_receive} failed. Player.trade_with_bank returned false."
-
-                    elif action_type == "propose_trade":
-                        partner_name = action.get("partner_player_name")
-                        offered = action.get("resources_offered", {})
-                        requested = action.get("resources_requested")
-                        if not partner_name or not offered or not requested:
-                            current_turn_last_action_status = "error_missing_input"
-                            current_turn_last_action_error_details = f"Invalid propose_trade: Missing partner_player_name, resources_offered, or resources_requested. Got: partner='{partner_name}', offered='{offered}', requested='{requested}'"
-                        else:
-                            print(f"{currPlayer.name} proposes a trade with {partner_name}. Offering: {offered}, Requesting: {requested}.")
-                            target_player = self._get_player_by_name(partner_name)
-                            if not target_player:
-                                current_turn_last_action_status = "error_invalid_target"
-                                current_turn_last_action_error_details = f"Trade failed: Player {partner_name} not found."
-                            elif target_player == currPlayer:
-                                current_turn_last_action_status = "error_invalid_target"
-                                current_turn_last_action_error_details = "Trade failed: Player cannot trade with themselves."
-                            # Check if proposer has the resources to offer
-                            elif not all(currPlayer.resources.get(res, 0) >= count for res, count in offered.items()):
-                                missing_offered_res = [f"{count} {res}" for res, count in offered.items() if currPlayer.resources.get(res,0) < count]
-                                current_turn_last_action_status = "error_insufficient_resources"
-                                current_turn_last_action_error_details = f"Cannot propose trade: You don't have the resources you're offering. Missing: {', '.join(missing_offered_res)}."
+                        elif action_type == "trade_with_bank":
+                            res_give, res_receive = action.get("resource_to_give", "").upper(), action.get("resource_to_receive", "").upper()
+                            res_types = ["WOOD", "BRICK", "SHEEP", "WHEAT", "ORE"]
+                            if not res_give or not res_receive or res_give not in res_types or res_receive not in res_types:
+                                current_turn_last_action_status = "error_invalid_input"
+                                current_turn_last_action_error_details = f"Invalid or missing resources for trade_with_bank. Got give:'{res_give}', receive:'{res_receive}'. Must be valid resource types."
                             else:
-                                if isinstance(target_player, LLMPlayer):
-                                    print(f"Prompting {target_player.name} to respond to the trade offer...")
-                                    # Feedback for the target_player will be handled by their own modelState generation
-                                    # when they are prompted for the trade_response_action.
-                                    # So, no direct feedback setting here for target_player from proposer's action.
-                                    # --- START OF NEGOTIATION INITIATION ---
-                                    print(f"Initiating negotiation between {currPlayer.name} and {target_player.name}.")
-                                    self.negotiation_active = True
-                                    initial_offer_details = {
-                                        "from_player": currPlayer.name,
-                                        "to_player": target_player.name,
-                                        "resources_offered": offered,
-                                        "resources_requested": requested,
-                                        "turn": numTurns # Game turn number or a negotiation specific counter
-                                    }
-                                    self.negotiation_context = {
-                                        'initiator': currPlayer,
-                                        'target': target_player,
-                                        'offer_history': [initial_offer_details]
-                                    }
-                                    # --- CALL HANDLE_NEGOTIATION ---
-                                    trade_accepted = self.handle_negotiation(currPlayer, target_player, numTurns)
-                                    # --- POST NEGOTIATION ---
-                                    if trade_accepted:
-                                        current_turn_last_action_status = "success_negotiation_trade_accepted"
-                                        current_turn_last_action_error_details = f"Negotiation with {target_player.name} was successful and trade completed."
-                                        # Feedback for currPlayer (initiator) and target_player should have been set within handle_negotiation.
-                                    else:
-                                        current_turn_last_action_status = "info_negotiation_ended_no_trade"
-                                        current_turn_last_action_error_details = f"Negotiation with {target_player.name} ended without a trade agreement."
-                                        # Feedback for currPlayer (initiator) and target_player should have been set within handle_negotiation.
-                                    # Ensure negotiation_active is False (should be handled by handle_negotiation, but as a safeguard)
-                                    self.negotiation_active = False
-                                    # --- END OF NEGOTIATION HANDLING ---
+                                # Determine actual trade ratio for res_give
+                                ratio = 4
+                                if state_for_current_action.current_player_bank_trade_ratios["has_general_3_to_1_port"]:
+                                    ratio = 3
+                                if state_for_current_action.current_player_bank_trade_ratios["specific_2_to_1_ports"].get(res_give):
+                                    ratio = 2
 
-                                    # OLD Direct Trade Logic (REMOVED - now handled by negotiation loop)
-                                    # target_player.feedback_status_for_next_state = None
-                                    # target_player.feedback_details_for_next_state = None
-                                    #
-                                    # trade_state = modelState(self, target_player,
-                                    #                          trade_offer_pending=True,
-                                    #                          trade_offering_player_name=currPlayer.name,
-                                    #                          trade_resources_offered_to_you=offered,
-                                    #                          trade_resources_requested_from_you=requested)
-                                    # trade_response_action = target_player.get_llm_move(trade_state)
-                                    # print(f"{target_player.name} (Trade Offer Thoughts: {target_player.thoughts}) -> Response: {trade_response_action}")
-                                    #
-                                    # if trade_response_action.get("type") == "accept_trade":
-                                    #     can_target_give = all(target_player.resources.get(res, 0) >= count for res, count in requested.items())
-                                    #     if not can_target_give:
-                                    #         current_turn_last_action_status = "error_trade_partner_insufficient_resources"
-                                    #         missing_requested_res = [f"{count} {res}" for res, count in requested.items() if target_player.resources.get(res,0) < count]
-                                    #         current_turn_last_action_error_details = f"Trade accepted by {target_player.name}, but they lack resources: {', '.join(missing_requested_res)}. Trade cancelled."
-                                    #         target_player.feedback_status_for_next_state = "error_insufficient_resources"
-                                    #         target_player.feedback_details_for_next_state = f"You accepted a trade but lacked the requested resources: {', '.join(missing_requested_res)}."
-                                    #     else: # Trade successful
-                                    #         for res, count in offered.items(): currPlayer.resources[res] -= count; target_player.resources[res] += count
-                                    #         for res, count in requested.items(): target_player.resources[res] -= count; currPlayer.resources[res] += count
-                                    #         current_turn_last_action_status = "success_trade_accepted"
-                                    #         current_turn_last_action_error_details = f"Trade accepted and completed with {target_player.name}!"
-                                    #         print(f"Trade completed. {currPlayer.name} resources: {currPlayer.resources}, {target_player.name} resources: {target_player.resources}")
-                                    #         target_player.feedback_status_for_next_state = "success_trade_accepted"
-                                    #         target_player.feedback_details_for_next_state = f"You successfully accepted and completed the trade with {currPlayer.name}."
-                                    #
-                                    # else: # Trade rejected by target LLM
-                                    #     current_turn_last_action_status = "info_trade_rejected"
-                                    #     current_turn_last_action_error_details = f"{target_player.name} rejected the trade or gave an invalid response ({trade_response_action.get('type')})."
-                                    #     target_player.feedback_status_for_next_state = "info_trade_rejected"
-                                    #     target_player.feedback_details_for_next_state = f"You rejected or did not validly respond to the trade from {currPlayer.name}."
+                                if currPlayer.resources.get(res_give, 0) < ratio:
+                                    current_turn_last_action_status = "error_insufficient_resources"
+                                    current_turn_last_action_error_details = f"Cannot trade with bank: Insufficient {res_give}. You have {currPlayer.resources.get(res_give, 0)}, need {ratio} for 1 {res_receive}."
+                                elif currPlayer.trade_with_bank(res_give, res_receive): # player.trade_with_bank should use the correct ratio
+                                    current_turn_last_action_status = "success"
+                                    current_turn_last_action_error_details = f"Successfully traded {ratio} {res_give} for 1 {res_receive} with the bank."
+                                else: # player.trade_with_bank returned false
+                                    current_turn_last_action_status = "error_unknown_failure"
+                                    current_turn_last_action_error_details = f"Bank trade of {res_give} for {res_receive} failed. Player.trade_with_bank returned false."
 
-                                elif isinstance(target_player, heuristicAIPlayer):
-                                    print(f"Heuristic AI {target_player.name} automatically rejects trade with {currPlayer.name} for now.")
-                                    current_turn_last_action_status = "info_trade_rejected_heuristic"
-                                    current_turn_last_action_error_details = f"Trade with Heuristic AI {target_player.name} was automatically rejected."
+                        elif action_type == "propose_trade":
+                            partner_name = action.get("partner_player_name")
+                            offered = action.get("resources_offered", {})
+                            requested = action.get("resources_requested")
+                            if not partner_name or not offered or not requested:
+                                current_turn_last_action_status = "error_missing_input"
+                                current_turn_last_action_error_details = f"Invalid propose_trade: Missing partner_player_name, resources_offered, or resources_requested. Got: partner='{partner_name}', offered='{offered}', requested='{requested}'"
+                            else:
+                                print(f"{currPlayer.name} proposes a trade with {partner_name}. Offering: {offered}, Requesting: {requested}.")
+                                target_player = self._get_player_by_name(partner_name)
+                                if not target_player:
+                                    current_turn_last_action_status = "error_invalid_target"
+                                    current_turn_last_action_error_details = f"Trade failed: Player {partner_name} not found."
+                                elif target_player == currPlayer:
+                                    current_turn_last_action_status = "error_invalid_target"
+                                    current_turn_last_action_error_details = "Trade failed: Player cannot trade with themselves."
+                                # Check if proposer has the resources to offer
+                                elif not all(currPlayer.resources.get(res, 0) >= count for res, count in offered.items()):
+                                    missing_offered_res = [f"{count} {res}" for res, count in offered.items() if currPlayer.resources.get(res,0) < count]
+                                    current_turn_last_action_status = "error_insufficient_resources"
+                                    current_turn_last_action_error_details = f"Cannot propose trade: You don't have the resources you're offering. Missing: {', '.join(missing_offered_res)}."
                                 else:
-                                    current_turn_last_action_status = "error_invalid_target_type"
-                                    current_turn_last_action_error_details = f"Trade proposed to non-LLM/non-Heuristic player {target_player.name}. Not handled."
+                                    if isinstance(target_player, LLMPlayer):
+                                        print(f"Prompting {target_player.name} to respond to the trade offer...")
+                                        # Feedback for the target_player will be handled by their own modelState generation
+                                        # when they are prompted for the trade_response_action.
+                                        # So, no direct feedback setting here for target_player from proposer's action.
 
-                    elif action_type == "play_knight_card":
-                        # Basic check: does player have a knight card?
-                        if currPlayer.devCards.get("KNIGHT", 0) > 0:
-                             # currPlayer.playKnightCard(self.board) # This method needs to exist and handle robber movement prompt
-                             # For now, just acknowledge and set placeholder feedback
-                            print(f"{currPlayer.name} wants to play a KNIGHT card.")
-                            current_turn_last_action_status = "info_knight_played_concept" # Placeholder
-                            current_turn_last_action_error_details = "Knight card play initiated (robber movement part not fully detailed here for LLM feedback yet)."
-                            # Actual robber movement after knight would be a separate state/prompt for the LLM.
-                            # This action itself (playing the card) is successful if they have it.
-                            # The consequence (moving robber) is what needs more detailed handling.
-                            # For now, let's assume playing the card deducts it and sets flag.
-                            # Robber movement would then be triggered.
-                            # This part needs careful sequencing if the LLM is to choose where to move the robber *after* playing knight.
-                            # For now, we'll assume the `player.playKnightCard` handles this internally or flags for it.
-                            # Let's assume a simplified player.play_knight() that returns true/false.
-                            # if currPlayer.play_knight_card_method_on_player_object(self.board):
-                            #    current_turn_last_action_status = "success"
-                            #    current_turn_last_action_error_details = "Successfully played Knight card. Robber phase will follow if applicable."
-                            #    self.check_largest_army(currPlayer) # Check for largest army
-                            #    self.player_to_move_robber = currPlayer # Trigger robber movement by this player
-                            # else:
-                            #    current_turn_last_action_status = "error_play_knight_failed"
-                            #    current_turn_last_action_error_details = "Failed to play Knight card (e.g., already played dev card this turn)."
-                            # This is a simplification. Full implementation of play_knight_card is complex.
-                        else:
-                            current_turn_last_action_status = "error_no_knight_card"
-                            current_turn_last_action_error_details = "Cannot play Knight card: You do not have one."
+                                        # --- START OF NEGOTIATION INITIATION using NegotiationManager ---
+                                        print(f"Initiating negotiation between {currPlayer.name} and {target_player.name} using NegotiationManager.")
+                                        self.current_negotiation = NegotiationManager(game_turn_started=numTurns)
+                                        initial_offer_details_nm = {
+                                            "from_player": currPlayer.name,
+                                            "to_player": target_player.name,
+                                            "resources_offered": offered,
+                                            "resources_requested": requested,
+                                            "turn": numTurns, # Game turn number
+                                            "type": "initial_offer" # Explicitly type it
+                                        }
+                                        if self.current_negotiation.start_negotiation(currPlayer, target_player, initial_offer_details_nm, game_turn=numTurns):
+                                            # --- CALL REFACTORED HANDLE_NEGOTIATION ---
+                                            # The handle_negotiation now uses self.current_negotiation
+                                            trade_was_successful = self.handle_negotiation(currPlayer, target_player, numTurns) # Pass current turn
 
-                    elif action_type == "end_turn":
-                        current_turn_last_action_status = "success_end_turn" # Explicitly success
-                        current_turn_last_action_error_details = "Player chose to end their turn."
-                        print(f"{currPlayer.name} ends their turn.")
-                    else:
-                        current_turn_last_action_status = "error_unknown_action"
-                        current_turn_last_action_error_details = f"Unknown or unsupported main action type: '{action_type}'. Player ends turn by default."
-                        print(f"Unknown or unsupported main action type: {action_type} for {currPlayer.name}. Player ends turn by default.")
+                                            if trade_was_successful:
+                                                current_turn_last_action_status = "success_negotiation_trade_accepted"
+                                                current_turn_last_action_error_details = f"Negotiation with {target_player.name} was successful and trade completed."
+                                            else:
+                                                # Feedback for initiator (currPlayer) if negotiation ended without acceptance
+                                                # (handle_negotiation should set feedback on players involved based on how it ended)
+                                                # This part is tricky, as handle_negotiation now sets feedback.
+                                                # We rely on currPlayer.feedback_status_for_next_state being set correctly by handle_negotiation.
+                                                # If it's not explicitly "success_negotiation_trade_accepted", assume it ended otherwise.
+                                                if currPlayer.feedback_status_for_next_state != "success_negotiation_trade_accepted":
+                                                    current_turn_last_action_status = currPlayer.feedback_status_for_next_state if currPlayer.feedback_status_for_next_state else "info_negotiation_ended_no_trade"
+                                                    current_turn_last_action_error_details = currPlayer.feedback_details_for_next_state if currPlayer.feedback_details_for_next_state else f"Negotiation with {target_player.name} ended without a trade agreement."
+                                        else:
+                                            current_turn_last_action_status = "error_negotiation_start_failed"
+                                            current_turn_last_action_error_details = "Failed to start negotiation with NegotiationManager."
+                                            self.current_negotiation = None # Clear if start failed
 
-                    # Store feedback for the LLM player's next modelState generation
-                    if isinstance(currPlayer, LLMPlayer):
+                                    elif isinstance(target_player, heuristicAIPlayer):
+                                        print(f"Heuristic AI {target_player.name} automatically rejects trade with {currPlayer.name} for now.")
+                                        current_turn_last_action_status = "info_trade_rejected_heuristic"
+                                        current_turn_last_action_error_details = f"Trade with Heuristic AI {target_player.name} was automatically rejected."
+                                    else:
+                                        current_turn_last_action_status = "error_invalid_target_type"
+                                        current_turn_last_action_error_details = f"Trade proposed to non-LLM/non-Heuristic player {target_player.name}. Not handled."
+
+                        elif action_type == "play_knight_card":
+                            # Basic check: does player have a knight card?
+                            if currPlayer.devCards.get("KNIGHT", 0) > 0:
+                                # currPlayer.playKnightCard(self.board) # This method needs to exist and handle robber movement prompt
+                                # For now, just acknowledge and set placeholder feedback
+                                print(f"{currPlayer.name} wants to play a KNIGHT card.")
+                                current_turn_last_action_status = "info_knight_played_concept" # Placeholder
+                                current_turn_last_action_error_details = "Knight card play initiated (robber movement part not fully detailed here for LLM feedback yet)."
+                                # This is a simplification. Full implementation of play_knight_card is complex.
+                                # Example of how it might work IF player.play_dev_card exists and handles knight logic:
+                                # if currPlayer.play_dev_card(self, 'KNIGHT'): # Assuming such a method
+                                #    current_turn_last_action_status = "success"
+                                #    current_turn_last_action_error_details = "Successfully played Knight card. Robber phase will follow if applicable."
+                                #    self.gameLogic.check_largest_army(currPlayer) # Use GameLogicManager
+                                #    self.player_to_move_robber = currPlayer # Trigger robber movement by this player
+                                # else:
+                                #    current_turn_last_action_status = "error_play_knight_failed"
+                                #    current_turn_last_action_error_details = "Failed to play Knight card (e.g., already played dev card this turn)."
+                            else:
+                                current_turn_last_action_status = "error_no_knight_card"
+                                current_turn_last_action_error_details = "Cannot play Knight card: You do not have one."
+                        # Removed "elif action_type == "end_turn":" because it's handled at the top of the loop
+                        else: # Handles unknown actions
+                            current_turn_last_action_status = "error_unknown_action"
+                            current_turn_last_action_error_details = f"Unknown or unsupported main action type: '{action_type}'. Action ignored."
+                            print(f"Unknown or unsupported main action type: {action_type} for {currPlayer.name}. Action ignored, player can try another action or end turn.")
+
+                        # Store feedback for the LLM player's next modelState generation (within this turn's loop)
+                        # This feedback is for the *next action decision* by the LLM in the same turn.
                         currPlayer.feedback_status_for_next_state = current_turn_last_action_status
                         currPlayer.feedback_details_for_next_state = current_turn_last_action_error_details
 
                         # Add memory entry for LLMPlayer
-                        # Construct a concise summary of the action and its outcome.
                         action_summary_for_memory = f"Action: {action_type}"
                         if action_type == "build_road": action_summary_for_memory += f" ({action.get('v1_index')}-{action.get('v2_index')})"
                         elif action_type in ["build_settlement", "build_city"]: action_summary_for_memory += f" at {action.get('vertex_index')}"
@@ -1429,8 +1410,11 @@ class catanAIGame():
 
                 elif isinstance(currPlayer, heuristicAIPlayer):
                     print(f"{currPlayer.name} (Heuristic) is making moves...")
-                    currPlayer.move(self.board)
-                    self.check_longest_road(currPlayer)
+                    currPlayer.move(self.board) # Heuristic AI makes all its moves in one go.
+
+                    # Check for game conditions after heuristic player's move
+                    self.gameLogic.check_longest_road(currPlayer)
+                    self.gameLogic.check_largest_army(currPlayer) # Assuming heuristic might play knights
 
                 # ... (common turn finalization, victory check, etc. as before) ...
                 print(f"Player:{currPlayer.name}, Resources:{currPlayer.resources}, Points: {currPlayer.victoryPoints}")

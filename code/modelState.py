@@ -55,25 +55,33 @@ class modelState():
         self.negotiation_participants = []
         self.negotiation_history = []
         self.your_turn_to_negotiate = False
-        self.negotiation_partner_name = None # Companion to your_turn_to_negotiate
+        self.negotiation_partner_name = None
+        self.negotiation_last_offer_details = None
 
-        if hasattr(catan_game, 'negotiation_active') and catan_game.negotiation_active:
-            # Check if the current_player is part of the active negotiation
-            negotiation_ctx = catan_game.negotiation_context
-            if negotiation_ctx.get('initiator') == current_player or negotiation_ctx.get('target') == current_player:
-                self.negotiation_in_progress = True
-                self.negotiation_participants = [negotiation_ctx['initiator'].name, negotiation_ctx['target'].name]
-                self.negotiation_history = negotiation_ctx['offer_history'] # This is a list of dicts
+        if hasattr(catan_game, 'current_negotiation') and catan_game.current_negotiation is not None:
+            neg_context_for_player = catan_game.current_negotiation.get_context_for_player(current_player)
+            self.negotiation_in_progress = neg_context_for_player.get("negotiation_active", False)
+            if self.negotiation_in_progress:
+                self.negotiation_participants = [
+                    neg_context_for_player.get("negotiation_initiator_name"),
+                    neg_context_for_player.get("negotiation_target_name")
+                ]
+                self.negotiation_history = neg_context_for_player.get("negotiation_history", [])
+                self.your_turn_to_negotiate = neg_context_for_player.get("your_turn_to_negotiate", False)
+                self.negotiation_partner_name = neg_context_for_player.get("negotiation_partner_name")
+                self.negotiation_last_offer_details = neg_context_for_player.get("last_offer")
+            # No specific 'else if negotiation just ended' needed here, as absence of active negotiation implies it.
 
-                # Determine if it's this player's turn to negotiate and who the partner is
-                # This part depends on how catanAIGame.handle_negotiation passes control.
-                # We'll use the `is_negotiation_turn` and `negotiation_partner_name` passed to __init__.
-                if is_negotiation_turn:
-                    self.your_turn_to_negotiate = True
-                    self.negotiation_partner_name = negotiation_partner_name
+        # Reputation scores for the current player
+        self.my_reputation_with_others = {}
+        if hasattr(catan_game, 'reputation') and current_player.name in catan_game.reputation:
+            self.my_reputation_with_others = catan_game.reputation[current_player.name]
+            # Also add how others see the current player (their reputation FROM others)
+            # This might be too much info or lead to complex reasoning, but for completeness:
+            # self.others_reputation_of_me = {p_name: catan_game.reputation[p_name].get(current_player.name, 0)
+            #                                for p_name in catan_game.reputation if p_name != current_player.name}
 
-        # Pick up feedback from player object if available (set by AIGame.py after an action)
-        # These are read before other state construction that might depend on them (like available_actions if feedback was about a failed build)
+
         self.last_action_status = getattr(current_player, 'feedback_status_for_next_state', None)
         self.last_action_error_details = getattr(current_player, 'feedback_details_for_next_state', None)
 
@@ -320,13 +328,78 @@ class modelState():
                         })
         choke_points_data = sorted(choke_points_data, key=lambda cp: cp["vertex_index"])
 
+        # --- Best Unoccupied Settlement Spots ---
+        # This requires knowing which spots are already occupied.
+        # We can get potential settlement spots and then filter out occupied ones.
+        # The heuristic from heuristicAIPlayer will be adapted here.
+
+        best_unoccupied_settlement_spots = []
+        # Create a set of all occupied vertex indices for quick lookup
+        occupied_vertex_indices = set()
+        for p_state in self.players: # self.players should be populated before this method is finalized
+            occupied_vertex_indices.update(p_state["settlements_vertex_indices"])
+            occupied_vertex_indices.update(p_state["cities_vertex_indices"])
+
+        # Iterate over all vertex coordinates in the board graph
+        for v_coord, vertex_obj in board_obj.boardGraph.items():
+            v_idx = pixel_to_vertex_index_map.get(v_coord)
+            if v_idx is None or v_idx in occupied_vertex_indices:
+                continue # Skip if no valid index or already occupied
+
+            # Check distance rule: must be at least 2 edges away from existing settlements/cities
+            is_valid_spot = True
+            for occupied_v_idx in occupied_vertex_indices:
+                # This requires a graph distance function, which is complex here.
+                # A simpler check: no adjacent vertex is occupied.
+                # This uses board_obj.boardGraph[v_coord].edgeList to find neighbors.
+                # For a more accurate distance rule, board.is_valid_settlement_location(v_coord, player_for_perspective) is needed.
+                # For now, use a simplified check: are any *directly adjacent* vertices (connected by an edge) occupied?
+                # This is not the full Catan rule, but a proxy for modelState.
+                # The true "get_potential_settlements" in board.py handles the full rule.
+                # We should use board_obj.get_potential_settlements(for_any_player_hypothetically)
+                # This is tricky because get_potential_settlements is player-specific (road connection).
+                # Let's use the heuristic directly on all unoccupied spots that meet basic criteria.
+                # The game rules (distance) will be enforced by AIGame when an action is attempted.
+                # Here, we just score based on heuristic.
+                pass # Distance rule check is complex to replicate here fully. Assume spot is buildable for heuristic scoring.
+
+
+            vertex_num_value = 0
+            resources_at_vertex = {} # store resource_type: count_of_hexes_with_this_resource
+            unique_resource_types = set()
+
+            for adjacent_hex_idx in vertex_obj.adjacentHexList:
+                hex_tile = board_obj.hexTileDict.get(adjacent_hex_idx)
+                if hex_tile and hex_tile.resource:
+                    resource_type = hex_tile.resource.type
+                    if resource_type != "DESERT":
+                        unique_resource_types.add(resource_type)
+                        # Store counts if needed for more complex heuristics, e.g. preferring two wood hexes
+                        resources_at_vertex[resource_type] = resources_at_vertex.get(resource_type, 0) + 1
+
+                    roll_num = hex_tile.resource.num if hex_tile.resource.num is not None else 0
+                    vertex_num_value += DICE_ROLL_PROBABILITIES.get(roll_num, 0)
+
+            # Add diversity bonus based on unique resource types
+            vertex_num_value += len(unique_resource_types) * 2 # Similar to heuristicAI
+
+            if vertex_num_value > 0: # Only consider spots with some production value
+                best_unoccupied_settlement_spots.append({
+                    "vertex_index": v_idx,
+                    "heuristic_score": round(vertex_num_value,1),
+                    "resource_types_available": sorted(list(unique_resource_types))
+                })
+
+        # Sort by score descending, then by vertex_index ascending for tie-breaking
+        best_unoccupied_settlement_spots = sorted(best_unoccupied_settlement_spots, key=lambda x: (-x["heuristic_score"], x["vertex_index"]))
+
 
         return {
             "hexes": sorted(hexes, key=lambda h: h["hex_index"]), # Sort for consistency
             "ports": sorted(ports, key=lambda p: p["type"]), # Sort for consistency
             "robber_location_hex_index": robber_location_hex_index,
-            "choke_points": choke_points_data # Add choke points here
-            # "hex_control" will be added later or needs refactor
+            "choke_points": choke_points_data, # Add choke points here
+            "best_unoccupied_settlement_spots": best_unoccupied_settlement_spots[:10] # Top 10
         }
 
     # Helper method to calculate hex control, called from __init__ after basic board and player states are ready
@@ -388,18 +461,39 @@ class modelState():
                     roads_indices.append(road_pair)
             roads_indices = sorted(list(set(roads_indices))) # Remove duplicates and sort
 
+            # Calculate VP from different sources for the progress object
+            vp_from_settlements_cities = len(settlements_indices) + (len(cities_indices) * 2)
+            vp_from_dev_cards = p.devCards.get('VP', 0)
+            vp_from_awards = 0
+            if p.largestArmyFlag:
+                vp_from_awards += 2 # Assuming 2 VP for largest army
+            if p.longestRoadFlag:
+                vp_from_awards += 2 # Assuming 2 VP for longest road
+
+            # Ensure total VP matches p.victoryPoints for consistency, though direct calculation is better
+            # This is a good check; if p.victoryPoints is the source of truth, use it.
+            # The breakdown helps the AI understand the sources.
+
             player_states.append({
                 "name": p.name,
                 "color": p.color,
                 "resources": p.resources, # Assuming this is a dict like {'WOOD': 1, 'BRICK': 0, ...}
-                "dev_cards": p.devCards, # Assuming this is a dict like {'KNIGHT': 0, ...}
+                "dev_cards_counts": p.devCards, # Renamed for clarity (e.g. {'KNIGHT':1, 'VP':0})
+                                              # Note: 'VP' in devCards is number of *unrevealed* VP cards.
+                                              # Revealed VPs are already in total victoryPoints.
                 "settlements_vertex_indices": settlements_indices,
                 "cities_vertex_indices": cities_indices,
                 "roads_vertex_indices_pairs": roads_indices,
-                "victory_points": p.victoryPoints,
+                "total_victory_points": p.victoryPoints, # Overall VP
+                "progress": {
+                    "vp_from_settlements_cities": vp_from_settlements_cities,
+                    "vp_from_unrevealed_dev_cards": vp_from_dev_cards, # VP cards in hand, not yet part of public VP
+                    "vp_from_awards": vp_from_awards, # Longest Road, Largest Army
+                    # "publicly_visible_vp": vp_from_settlements_cities + vp_from_awards # VP visible on board
+                },
                 "knights_played": p.knightsPlayed,
-                "largest_army": p.largestArmyFlag,
-                "longest_road": p.longestRoadFlag,
+                "has_largest_army": p.largestArmyFlag, # Renamed for clarity
+                "has_longest_road": p.longestRoadFlag, # Renamed for clarity
                 "is_current_player": p.name == current_player.name,
                 "threat_score": 0 # Will be calculated below
             })
@@ -409,27 +503,39 @@ class modelState():
             original_player_object = next((p_obj for p_obj in list(players_queue) if p_obj.name == player_state["name"]), None)
 
             if original_player_object:
-                # 1. Resource Affinity (based on production potential from settlements/cities)
-                production_potential = {"WOOD": 0, "BRICK": 0, "SHEEP": 0, "WHEAT": 0, "ORE": 0}
-                player_buildings = [] # List of (vertex_coord, type_is_city=True/False)
-                for s_coord in original_player_object.buildGraph.get('SETTLEMENTS', []):
-                    player_buildings.append((s_coord, False))
-                for c_coord in original_player_object.buildGraph.get('CITIES', []):
-                    player_buildings.append((c_coord, True))
+                # Recalculate public VP for threat score to ensure it's based on current player_state data
+                # This is slightly redundant if p.visibleVictoryPoints is already accurate, but good for internal consistency here.
+                player_state["progress"]["publicly_visible_vp"] = player_state["progress"]["vp_from_settlements_cities"] + \
+                                                               player_state["progress"]["vp_from_awards"]
 
-                for v_coord, is_city in player_buildings:
-                    vertex_obj = board_obj.boardGraph.get(v_coord)
+
+                # 1. Resource Income Potential & Affinity
+                resource_income_potential = {"WOOD": 0, "BRICK": 0, "SHEEP": 0, "WHEAT": 0, "ORE": 0}
+                player_buildings = [] # List of (vertex_coord, type_is_city=True/False)
+                for s_coord_pixel in original_player_object.buildGraph.get('SETTLEMENTS', []):
+                    player_buildings.append((s_coord_pixel, False))
+                for c_coord_pixel in original_player_object.buildGraph.get('CITIES', []):
+                    player_buildings.append((c_coord_pixel, True))
+
+                for v_coord_pixel, is_city in player_buildings:
+                    vertex_obj = board_obj.boardGraph.get(v_coord_pixel)
                     if vertex_obj:
                         for hex_idx in vertex_obj.adjacentHexList:
                             hex_tile = board_obj.hexTileDict.get(hex_idx)
-                            if hex_tile and hex_tile.resource and hex_tile.resource.type != "DESERT":
+                            if hex_tile and hex_tile.resource and hex_tile.resource.type != "DESERT" and hex_tile.resource.num is not None:
                                 resource_type = hex_tile.resource.type
-                                production_potential[resource_type] += (2 if is_city else 1)
+                                probability_dots = DICE_ROLL_PROBABILITIES.get(hex_tile.resource.num, 0)
+                                # Resource income is sum of (dots * (2 if city else 1))
+                                resource_income_potential[resource_type] += probability_dots * (2 if is_city else 1)
 
-                if sum(production_potential.values()) > 0:
-                    player_state["resource_affinity"] = max(production_potential, key=production_potential.get)
+                player_state["resource_income_potential"] = resource_income_potential
+
+                # Determine resource affinity based on the highest income potential
+                if sum(resource_income_potential.values()) > 0:
+                    player_state["resource_affinity"] = max(resource_income_potential, key=resource_income_potential.get)
                 else:
                     player_state["resource_affinity"] = "NONE"
+
 
                 # 2. Strategic Posture (simplified inference)
                 num_settlements = len(player_state["settlements_vertex_indices"])

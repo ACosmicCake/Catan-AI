@@ -5,8 +5,9 @@ from board import *
 from gameView import *
 from player import *
 from heuristicAIPlayer import *
-from LLMPlayer import LLMPlayer # Added import
-from modelState import modelState # Added import
+from LLMPlayer import LLMPlayer
+from modelState import modelState
+from gamelogic import GameLogicManager # Added import
 import queue
 import numpy as np
 import sys, pygame
@@ -20,7 +21,7 @@ class catanGame():
 
         #Game State variables
         self.gameOver = False
-        self.maxPoints = 8
+        self.maxPoints = 8 # Human games can be shorter
         self.numPlayers = 0
 
         while(self.numPlayers not in [3,4]): #Only accept 3 and 4 player games
@@ -32,19 +33,19 @@ class catanGame():
         print("Initializing game with {} players...".format(self.numPlayers))
         print("Note that Player 1 goes first, Player 2 second and so forth.")
         
-        #Initialize blank player queue and initial set up of roads + settlements
+        #Initialize blank player queue
         self.playerQueue = queue.Queue(self.numPlayers)
         self.gameSetup = True #Boolean to take care of setup phase
+        self.robber_action_pending_for_player = None
+
+        #Initialize GameLogicManager
+        self.gameLogic = GameLogicManager(self.board, lambda: list(self.playerQueue.queue))
 
         #Initialize boardview object
         self.boardView = catanGameView(self.board, self)
-        self.robber_action_pending_for_player = None # Added for managing mandatory robber moves
 
-        #Run functions to view board and vertex graph
-        #self.board.printGraph()
-
-        #Functiont to go through initial set up
-        self.build_initial_settlements()
+        #Function to go through initial set up
+        self.build_initial_settlements() # Populates playerQueue
 
         #Display initial board
         self.boardView.displayGameScreen()
@@ -304,45 +305,22 @@ class catanGame():
         player.move_robber(hex_i, self.board, playerRobbed)
 
 
-    #Function to roll dice 
-    def rollDice(self):
-        dice_1 = np.random.randint(1,7)
-        dice_2 = np.random.randint(1,7)
-        diceRoll = dice_1 + dice_2
-        print("Dice Roll = ", diceRoll, "{", dice_1, dice_2, "}")
-
-        self.boardView.displayDiceRoll(diceRoll)
-
-        return diceRoll
+    #Function to roll dice - Now uses GameLogicManager
+    # def rollDice(self):
+    #     dice_1 = np.random.randint(1,7)
+    #     dice_2 = np.random.randint(1,7)
+    #     diceRoll = dice_1 + dice_2
+    #     print("Dice Roll = ", diceRoll, "{", dice_1, dice_2, "}")
+    #     self.boardView.displayDiceRoll(diceRoll)
+    #     return diceRoll
 
     #Function to update resources for all players
     def update_playerResources(self, diceRoll, currentPlayer):
         if(diceRoll != 7): #Collect resources if not a 7
-            #First get the hex or hexes corresponding to diceRoll
-            hexResourcesRolled = self.board.getHexResourceRolled(diceRoll)
-            #print('Resources rolled this turn:', hexResourcesRolled)
-
-            #Check for each player
+            self.gameLogic.distribute_resources(diceRoll) # Use GameLogicManager
+            # Print player info after resource distribution
             for player_i in list(self.playerQueue.queue):
-                #Check each settlement the player has
-                for settlementCoord in player_i.buildGraph['SETTLEMENTS']:
-                    for adjacentHex in self.board.boardGraph[settlementCoord].adjacentHexList: #check each adjacent hex to a settlement
-                        if(adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].robber == False): #This player gets a resource if hex is adjacent and no robber
-                            resourceGenerated = self.board.hexTileDict[adjacentHex].resource.type
-                            player_i.resources[resourceGenerated] += 1
-                            print("{} collects 1 {} from Settlement".format(player_i.name, resourceGenerated))
-                
-                #Check each City the player has
-                for cityCoord in player_i.buildGraph['CITIES']:
-                    for adjacentHex in self.board.boardGraph[cityCoord].adjacentHexList: #check each adjacent hex to a settlement
-                        if(adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].robber == False): #This player gets a resource if hex is adjacent and no robber
-                            resourceGenerated = self.board.hexTileDict[adjacentHex].resource.type
-                            player_i.resources[resourceGenerated] += 2
-                            print("{} collects 2 {} from City".format(player_i.name, resourceGenerated))
-
                 print("Player:{}, Resources:{}, Points: {}".format(player_i.name, player_i.resources, player_i.victoryPoints))
-                #print('Dev Cards:{}'.format(player_i.devCards))
-                #print("RoadsLeft:{}, SettlementsLeft:{}, CitiesLeft:{}".format(player_i.roadsLeft, player_i.settlementsLeft, player_i.citiesLeft))
                 print('MaxRoadLength:{}, LongestRoad:{}\n'.format(player_i.maxRoadLength, player_i.longestRoadFlag))
         
         #Logic for a 7 roll
@@ -371,49 +349,49 @@ class catanGame():
                 self.boardView.displayGameScreen()#Update back to original gamescreen
 
 
-    #function to check if a player has the longest road - after building latest road
-    def check_longest_road(self, player_i):
-        if(player_i.maxRoadLength >= 5): #Only eligible if road length is at least 5
-            longestRoad = True
-            for p in list(self.playerQueue.queue):
-                if(p.maxRoadLength >= player_i.maxRoadLength and p != player_i): #Check if any other players have a longer road
-                    longestRoad = False
+    #function to check if a player has the longest road - Now uses GameLogicManager
+    # def check_longest_road(self, player_i):
+        # if(player_i.maxRoadLength >= 5): #Only eligible if road length is at least 5
+        #     longestRoad = True
+        #     for p in list(self.playerQueue.queue):
+        #         if(p.maxRoadLength >= player_i.maxRoadLength and p != player_i): #Check if any other players have a longer road
+        #             longestRoad = False
             
-            if(longestRoad and player_i.longestRoadFlag == False): #if player_i takes longest road and didn't already have longest road
-                #Set previous players flag to false and give player_i the longest road points
-                prevPlayer = ''
-                for p in list(self.playerQueue.queue):
-                    if(p.longestRoadFlag):
-                        p.longestRoadFlag = False
-                        p.victoryPoints -= 2
-                        prevPlayer = 'from Player ' + p.name
+        #     if(longestRoad and player_i.longestRoadFlag == False): #if player_i takes longest road and didn't already have longest road
+        #         #Set previous players flag to false and give player_i the longest road points
+        #         prevPlayer = ''
+        #         for p in list(self.playerQueue.queue):
+        #             if(p.longestRoadFlag):
+        #                 p.longestRoadFlag = False
+        #                 p.victoryPoints -= 2
+        #                 prevPlayer = 'from Player ' + p.name
     
-                player_i.longestRoadFlag = True
-                player_i.victoryPoints += 2
+        #         player_i.longestRoadFlag = True
+        #         player_i.victoryPoints += 2
 
-                print("Player {} takes Longest Road {}".format(player_i.name, prevPlayer))
+        #         print("Player {} takes Longest Road {}".format(player_i.name, prevPlayer))
 
-    #function to check if a player has the largest army - after playing latest knight
-    def check_largest_army(self, player_i):
-        if(player_i.knightsPlayed >= 3): #Only eligible if at least 3 knights are player
-            largestArmy = True
-            for p in list(self.playerQueue.queue):
-                if(p.knightsPlayed >= player_i.knightsPlayed and p != player_i): #Check if any other players have more knights played
-                    largestArmy = False
+    #function to check if a player has the largest army - Now uses GameLogicManager
+    # def check_largest_army(self, player_i):
+        # if(player_i.knightsPlayed >= 3): #Only eligible if at least 3 knights are player
+        #     largestArmy = True
+        #     for p in list(self.playerQueue.queue):
+        #         if(p.knightsPlayed >= player_i.knightsPlayed and p != player_i): #Check if any other players have more knights played
+        #             largestArmy = False
             
-            if(largestArmy and player_i.largestArmyFlag == False): #if player_i takes largest army and didn't already have it
-                #Set previous players flag to false and give player_i the largest points
-                prevPlayer = ''
-                for p in list(self.playerQueue.queue):
-                    if(p.largestArmyFlag):
-                        p.largestArmyFlag = False
-                        p.victoryPoints -= 2
-                        prevPlayer = 'from Player ' + p.name
+        #     if(largestArmy and player_i.largestArmyFlag == False): #if player_i takes largest army and didn't already have it
+        #         #Set previous players flag to false and give player_i the largest points
+        #         prevPlayer = ''
+        #         for p in list(self.playerQueue.queue):
+        #             if(p.largestArmyFlag):
+        #                 p.largestArmyFlag = False
+        #                 p.victoryPoints -= 2
+        #                 prevPlayer = 'from Player ' + p.name
     
-                player_i.largestArmyFlag = True
-                player_i.victoryPoints += 2
+        #         player_i.largestArmyFlag = True
+        #         player_i.victoryPoints += 2
 
-                print("Player {} takes Largest Army {}".format(player_i.name, prevPlayer))
+        #         print("Player {} takes Largest Army {}".format(player_i.name, prevPlayer))
 
     # Method to handle LLM player's turn with validation and re-prompting
     def handle_llm_turn(self, llm_player):
@@ -683,67 +661,48 @@ class catanGame():
                     #TO-DO: Add option of AI Player playing a dev card prior to dice roll
                     if(currPlayer.isAI):
                         #Roll Dice
-                        diceNum = self.rollDice()
+                        diceNum = self.gameLogic.roll_dice() # Use GameLogicManager
                         diceRolled = True
+                        self.boardView.displayDiceRoll(diceNum) # Display dice roll on GUI
                         self.update_playerResources(diceNum, currPlayer)
 
-                        #currPlayer.move(self.board) #AI Player makes all its moves
                         if isinstance(currPlayer, LLMPlayer):
-                            # LLM Player's turn is handled by a dedicated loop
-                            # Dice roll and resource update are done at the start of the LLM's turn segment
                             turnOver = self.handle_llm_turn(currPlayer)
-                        elif hasattr(currPlayer, 'move'): # For HeuristicAIPlayer or other AI with a 'move' method
+                        elif hasattr(currPlayer, 'move'): # For HeuristicAIPlayer
                             currPlayer.move(self.board)
-                            turnOver = True # Assume heuristic AI completes its turn in one 'move' call
-                        else: # Should not happen if isAI is true
-                            print(f"Warning: AI Player {currPlayer.name} has no 'move' method and is not LLMPlayer. Ending turn.")
+                            turnOver = True
+                        else:
+                            print(f"Warning: AI Player {currPlayer.name} has no 'move' method. Ending turn.")
                             turnOver = True
 
-                        #Check if AI player gets longest road/largest army and update Victory points
-                        # These checks should be done after each relevant action (e.g. road build for longest_road)
-                        # For LLM, check_longest_road is called within handle_llm_turn after a road is built.
-                        # Largest army check would be after playing a knight card.
-                        # For HeuristicAI, these might need to be called after its .move() if not handled internally.
-                        # For simplicity, let's assume .move() for HeuristicAI handles its own point updates or we call it here.
-                        if not isinstance(currPlayer, LLMPlayer): # LLM handles this internally now or after specific actions
-                            self.check_longest_road(currPlayer)
-                        self.check_largest_army(currPlayer)
+                        if not isinstance(currPlayer, LLMPlayer): # LLM turn handles its own checks via handle_llm_turn
+                            self.gameLogic.check_longest_road(currPlayer) # Use GameLogicManager
+                        self.gameLogic.check_largest_army(currPlayer) # Use GameLogicManager for all AI after move
                         print("Player:{}, Resources:{}, Points: {}".format(currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
                         
-                        self.boardView.displayGameScreen()#Update back to original gamescreen
-                        turnOver = True
+                        self.boardView.displayGameScreen()
+                        turnOver = True # Ensure turn ends for AI after all actions
 
                     else: #Game loop for human players
                         for e in pygame.event.get(): #Get player actions/in-game events
-                            #print(e)
                             if e.type == pygame.QUIT:
                                 sys.exit(0)
 
-                            #Check mouse click in rollDice
                             if(e.type == pygame.MOUSEBUTTONDOWN):
-                                #Check if player rolled the dice
                                 if(self.boardView.rollDice_button.collidepoint(e.pos)):
-                                    if(diceRolled == False): #Only roll dice once
-                                        diceNum = self.rollDice()
+                                    if(diceRolled == False):
+                                        diceNum = self.gameLogic.roll_dice() # Use GameLogicManager
                                         diceRolled = True
-                                        
                                         self.boardView.displayDiceRoll(diceNum)
-                                        #Code to update player resources with diceNum
                                         self.update_playerResources(diceNum, currPlayer)
 
-                                #Check if player wants to build road
                                 if(self.boardView.buildRoad_button.collidepoint(e.pos)):
-                                    #Code to check if road is legal and build
-                                    if(diceRolled == True): #Can only build after rolling dice
+                                    if(diceRolled == True):
                                         self.build(currPlayer, 'ROAD')
-                                        self.boardView.displayGameScreen()#Update back to original gamescreen
-
-                                        #Check if player gets longest road and update Victory points
-                                        self.check_longest_road(currPlayer)
-                                        #Show updated points and resources  
+                                        self.boardView.displayGameScreen()
+                                        self.gameLogic.check_longest_road(currPlayer) # Use GameLogicManager
                                         print("Player:{}, Resources:{}, Points: {}".format(currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
 
-                                #Check if player wants to build settlement
                                 if(self.boardView.buildSettlement_button.collidepoint(e.pos)):
                                     if(diceRolled == True): #Can only build settlement after rolling dice
                                         self.build(currPlayer, 'SETTLE')
@@ -769,12 +728,12 @@ class catanGame():
 
                                 #Check if player wants to play a development card - can play devCard whenever after rolling dice
                                 if(self.boardView.playDevCard_button.collidepoint(e.pos)):
-                                        currPlayer.play_devCard(self)
-                                        self.boardView.displayGameScreen()#Update back to original gamescreen
+                                        currPlayer.play_devCard(self) # play_devCard in player.py might call game.robber or game.build
+                                        self.boardView.displayGameScreen()
                                         
-                                        #Check for Largest Army and longest road
-                                        self.check_largest_army(currPlayer)
-                                        self.check_longest_road(currPlayer)
+                                        # Check for Largest Army and longest road
+                                        self.gameLogic.check_largest_army(currPlayer) # Use GameLogicManager
+                                        self.gameLogic.check_longest_road(currPlayer) # Use GameLogicManager
                                         #Show updated points and resources  
                                         print("Player:{}, Resources:{}, Points: {}".format(currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
                                         print('Available Dev Cards:', currPlayer.devCards)
