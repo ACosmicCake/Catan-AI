@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project is an adaptation of a Settlers of Catan framework, originally built in Python with a focus on Reinforcement Learning agents. It has been significantly modified to serve as an "AI Arena" where multiple AI players, including Large Language Models (LLMs) and heuristic-based AIs, can play against each other.
+This project is an adaptation of a Settlers of Catan framework, originally built in Python with a focus on LLM agents. It has been significantly modified to serve as an "AI Arena" where multiple AI players, including Large Language Models (LLMs) and heuristic-based AIs, can play against each other.
 
 The game features a GUI implemented using Pygame, and the current primary mode of play involves AI-only games, showcasing the decision-making processes of different AI agents, including the "thoughts" of LLM players.
 
