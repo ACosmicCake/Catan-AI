@@ -280,36 +280,30 @@ class player():
             print("No Dev Cards Left!")
             return False
 
-        devCardIndex = np.random.randint(0, len(devCardsToDraw))
+        devCardIndex = np.random.randint(0, len(devCardsToDraw)) # This line was already correctly indented
 
-            #Get a random permutation and draw a card
-            devCardsToDraw = np.random.permutation(devCardsToDraw)
-            cardDrawn = devCardsToDraw[devCardIndex]
+        #Get a random permutation and draw a card
+        devCardsToDraw = np.random.permutation(devCardsToDraw) # Corrected indentation
+        cardDrawn = devCardsToDraw[devCardIndex]
 
-            #Update player resources
-            self.resources['ORE'] -= 1
-            self.resources['WHEAT'] -= 1
-            self.resources['SHEEP'] -= 1
+        #Update player resources
+        self.resources['ORE'] -= 1
+        self.resources['WHEAT'] -= 1
+        self.resources['SHEEP'] -= 1
 
-            #If card is a victory point apply immediately, else add to new card list
-            if(cardDrawn == 'VP'):
-                self.victoryPoints += 1
-                board.devCardStack[cardDrawn] -= 1
-                self.devCards[cardDrawn] += 1
-                self.visibleVictoryPoints = self.victoryPoints - self.devCards['VP']
-            
-            else:#Update player dev card and the stack
-                self.newDevCards.append(cardDrawn)
-                board.devCardStack[cardDrawn] -= 1
-            
-            print("{} drew a {} from Development Card Stack".format(self.name, cardDrawn))
-            return True
-
-        # This else block should ideally not be reached due to the check at the beginning of the function,
-        # but it's kept here as a fallback.
-        else:
-            print("Insufficient Resources for Dev Card. Cost: 1 ORE, 1 WHEAT, 1 SHEEP")
-            return False
+        #If card is a victory point apply immediately, else add to new card list
+        if(cardDrawn == 'VP'):
+            self.victoryPoints += 1
+            board.devCardStack[cardDrawn] -= 1
+            self.devCards[cardDrawn] += 1
+            self.visibleVictoryPoints = self.victoryPoints - self.devCards['VP']
+        
+        else:#Update player dev card and the stack
+            self.newDevCards.append(cardDrawn)
+            board.devCardStack[cardDrawn] -= 1
+        
+        print("{} drew a {} from Development Card Stack".format(self.name, cardDrawn))
+        return True
 
     #Function to update dev card stack with dev cards drawn from prior turn
     def updateDevCards(self):
@@ -556,4 +550,3 @@ class player():
         else:
             print("\nPlayer {} has {} cards and does not need to discard any cards!".format(self.name, totalResourceCount))
             return
-

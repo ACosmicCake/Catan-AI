@@ -1170,102 +1170,102 @@ class catanAIGame():
                         elif action_type == "build_road":
                             v1_idx, v2_idx = action.get("v1_index"), action.get("v2_index")
                             required_resources = state_for_current_action.action_costs["build_road"]
-                        can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
+                            can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
 
-                        if v1_idx is None or v2_idx is None:
-                            current_turn_last_action_status = "error_missing_input"
-                            current_turn_last_action_error_details = "Missing v1_index or v2_index for build_road."
-                        elif not can_afford:
-                            missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
-                            current_turn_last_action_status = "error_insufficient_resources"
-                            current_turn_last_action_error_details = f"Cannot build road: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
-                        else:
-                            v1_coord, v2_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx), self.board.vertex_index_to_pixel_dict.get(v2_idx)
-                            if not v1_coord or not v2_coord:
-                                current_turn_last_action_status = "error_invalid_input"
-                                current_turn_last_action_error_details = f"Invalid vertex indices for build_road: {v1_idx}, {v2_idx}. They do not exist on board."
-                            # Check if chosen road is in available_actions from the state the LLM used
-                            elif tuple(sorted((v1_idx, v2_idx))) not in state_for_current_action.available_actions.get("build_road", []):
-                                current_turn_last_action_status = "error_invalid_placement"
-                                current_turn_last_action_error_details = f"Road from {v1_idx} to {v2_idx} is not a valid placement according to available_actions. Valid roads: {state_for_current_action.available_actions.get('build_road', [])}."
-                            elif currPlayer.build_road(v1_coord, v2_coord, self.board): # player.build_road also checks resources again
-                                self.gameLogic.check_longest_road(currPlayer) # Use GameLogicManager
-                                current_turn_last_action_status = "success"
-                                current_turn_last_action_error_details = f"Successfully built road from {v1_idx} to {v2_idx}."
+                            if v1_idx is None or v2_idx is None:
+                                current_turn_last_action_status = "error_missing_input"
+                                current_turn_last_action_error_details = "Missing v1_index or v2_index for build_road."
+                            elif not can_afford:
+                                missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
+                                current_turn_last_action_status = "error_insufficient_resources"
+                                current_turn_last_action_error_details = f"Cannot build road: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
                             else:
-                                current_turn_last_action_status = "error_rule_violation"
-                                current_turn_last_action_error_details = f"Failed to build road from {v1_idx} to {v2_idx}. Ensure it's connected and path is clear. Player.build_road returned false."
+                                v1_coord, v2_coord = self.board.vertex_index_to_pixel_dict.get(v1_idx), self.board.vertex_index_to_pixel_dict.get(v2_idx)
+                                if not v1_coord or not v2_coord:
+                                    current_turn_last_action_status = "error_invalid_input"
+                                    current_turn_last_action_error_details = f"Invalid vertex indices for build_road: {v1_idx}, {v2_idx}. They do not exist on board."
+                                # Check if chosen road is in available_actions from the state the LLM used
+                                elif tuple(sorted((v1_idx, v2_idx))) not in state_for_current_action.available_actions.get("build_road", []):
+                                    current_turn_last_action_status = "error_invalid_placement"
+                                    current_turn_last_action_error_details = f"Road from {v1_idx} to {v2_idx} is not a valid placement according to available_actions. Valid roads: {state_for_current_action.available_actions.get('build_road', [])}."
+                                elif currPlayer.build_road(v1_coord, v2_coord, self.board): # player.build_road also checks resources again
+                                    self.gameLogic.check_longest_road(currPlayer) # Use GameLogicManager
+                                    current_turn_last_action_status = "success"
+                                    current_turn_last_action_error_details = f"Successfully built road from {v1_idx} to {v2_idx}."
+                                else:
+                                    current_turn_last_action_status = "error_rule_violation"
+                                    current_turn_last_action_error_details = f"Failed to build road from {v1_idx} to {v2_idx}. Ensure it's connected and path is clear. Player.build_road returned false."
 
                         elif action_type == "build_settlement":
                             v_idx = action.get("vertex_index")
-                            required_resources = state_for_current_action.action_costs["build_settlement"]
-                        can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
+                            required_resources = state_for_current_action.action_costs["build_settlement"] # Moved this line up
+                            can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
 
-                        if v_idx is None:
-                            current_turn_last_action_status = "error_missing_input"
-                            current_turn_last_action_error_details = "Missing vertex_index for build_settlement."
-                        elif not can_afford:
-                            missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
-                            current_turn_last_action_status = "error_insufficient_resources"
-                            current_turn_last_action_error_details = f"Cannot build settlement: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
-                        else:
-                            v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
-                            if not v_coord:
-                                current_turn_last_action_status = "error_invalid_input"
-                                current_turn_last_action_error_details = f"Invalid vertex index for build_settlement: {v_idx}. Does not exist on board."
-                            elif v_idx not in state_for_current_action.available_actions.get("build_settlement", []):
-                                current_turn_last_action_status = "error_invalid_placement"
-                                current_turn_last_action_error_details = f"Settlement at {v_idx} is not a valid placement. Valid locations: {state_for_current_action.available_actions.get('build_settlement', [])}."
-                            elif currPlayer.build_settlement(v_coord, self.board):
-                                current_turn_last_action_status = "success"
-                                current_turn_last_action_error_details = f"Successfully built settlement at {v_idx}."
+                            if v_idx is None:
+                                current_turn_last_action_status = "error_missing_input"
+                                current_turn_last_action_error_details = "Missing vertex_index for build_settlement."
+                            elif not can_afford:
+                                missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
+                                current_turn_last_action_status = "error_insufficient_resources"
+                                current_turn_last_action_error_details = f"Cannot build settlement: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
                             else:
-                                current_turn_last_action_status = "error_rule_violation"
-                                current_turn_last_action_error_details = f"Failed to build settlement at {v_idx}. Check distance rules and existing structures. Player.build_settlement returned false."
+                                v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
+                                if not v_coord:
+                                    current_turn_last_action_status = "error_invalid_input"
+                                    current_turn_last_action_error_details = f"Invalid vertex index for build_settlement: {v_idx}. Does not exist on board."
+                                elif v_idx not in state_for_current_action.available_actions.get("build_settlement", []):
+                                    current_turn_last_action_status = "error_invalid_placement"
+                                    current_turn_last_action_error_details = f"Settlement at {v_idx} is not a valid placement. Valid locations: {state_for_current_action.available_actions.get('build_settlement', [])}."
+                                elif currPlayer.build_settlement(v_coord, self.board):
+                                    current_turn_last_action_status = "success"
+                                    current_turn_last_action_error_details = f"Successfully built settlement at {v_idx}."
+                                else:
+                                    current_turn_last_action_status = "error_rule_violation"
+                                    current_turn_last_action_error_details = f"Failed to build settlement at {v_idx}. Check distance rules and existing structures. Player.build_settlement returned false."
 
                         elif action_type == "build_city":
                             v_idx = action.get("vertex_index")
-                            required_resources = state_for_current_action.action_costs["build_city"]
-                        can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
+                            required_resources = state_for_current_action.action_costs["build_city"] # Moved this line up
+                            can_afford = all(currPlayer.resources.get(res, 0) >= count for res, count in required_resources.items())
 
-                        if v_idx is None:
-                            current_turn_last_action_status = "error_missing_input"
-                            current_turn_last_action_error_details = "Missing vertex_index for build_city."
-                        elif not can_afford:
-                            missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
-                            current_turn_last_action_status = "error_insufficient_resources"
-                            current_turn_last_action_error_details = f"Cannot build city: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
-                        else:
-                            v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
-                            if not v_coord:
-                                current_turn_last_action_status = "error_invalid_input"
-                                current_turn_last_action_error_details = f"Invalid vertex index for build_city: {v_idx}. Does not exist on board."
-                            elif v_idx not in state_for_current_action.available_actions.get("build_city", []):
-                                current_turn_last_action_status = "error_invalid_placement"
-                                current_turn_last_action_error_details = f"City at {v_idx} is not a valid placement (must be on existing settlement). Valid locations: {state_for_current_action.available_actions.get('build_city', [])}."
-                            elif currPlayer.build_city(v_coord, self.board): # Assumes player.build_city checks if it's a settlement of the player
-                                current_turn_last_action_status = "success"
-                                current_turn_last_action_error_details = f"Successfully built city at {v_idx}."
+                            if v_idx is None:
+                                current_turn_last_action_status = "error_missing_input"
+                                current_turn_last_action_error_details = "Missing vertex_index for build_city."
+                            elif not can_afford:
+                                missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
+                                current_turn_last_action_status = "error_insufficient_resources"
+                                current_turn_last_action_error_details = f"Cannot build city: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
                             else:
-                                current_turn_last_action_status = "error_rule_violation"
-                                current_turn_last_action_error_details = f"Failed to build city at {v_idx}. Ensure you have a settlement there. Player.build_city returned false."
+                                v_coord = self.board.vertex_index_to_pixel_dict.get(v_idx)
+                                if not v_coord:
+                                    current_turn_last_action_status = "error_invalid_input"
+                                    current_turn_last_action_error_details = f"Invalid vertex index for build_city: {v_idx}. Does not exist on board."
+                                elif v_idx not in state_for_current_action.available_actions.get("build_city", []):
+                                    current_turn_last_action_status = "error_invalid_placement"
+                                    current_turn_last_action_error_details = f"City at {v_idx} is not a valid placement (must be on existing settlement). Valid locations: {state_for_current_action.available_actions.get('build_city', [])}."
+                                elif currPlayer.build_city(v_coord, self.board): # Assumes player.build_city checks if it's a settlement of the player
+                                    current_turn_last_action_status = "success"
+                                    current_turn_last_action_error_details = f"Successfully built city at {v_idx}."
+                                else:
+                                    current_turn_last_action_status = "error_rule_violation"
+                                    current_turn_last_action_error_details = f"Failed to build city at {v_idx}. Ensure you have a settlement there. Player.build_city returned false."
 
                         elif action_type == "buy_development_card":
-                            required_resources = state_for_current_action.action_costs["buy_development_card"]
-                        can_afford = all(currPlayer.resources.get(res,0) >= count for res, count in required_resources.items())
-                        if not self.board.devCardStack: # Check if deck is empty
-                            current_turn_last_action_status = "error_no_dev_cards_left"
-                            current_turn_last_action_error_details = "Cannot buy development card: Deck is empty."
-                        elif not can_afford:
-                            missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
-                            current_turn_last_action_status = "error_insufficient_resources"
-                            current_turn_last_action_error_details = f"Cannot buy development card: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
-                        elif currPlayer.draw_devCard(self.board):
-                            current_turn_last_action_status = "success"
-                            current_turn_last_action_error_details = "Successfully bought a development card."
-                        else: # Should not happen if previous checks pass unless draw_devCard has other logic
-                            current_turn_last_action_status = "error_unknown_failure"
-                            current_turn_last_action_error_details = "Failed to buy development card for an unknown reason."
+                            required_resources = state_for_current_action.action_costs["buy_development_card"] # Moved this line up
+                            can_afford = all(currPlayer.resources.get(res,0) >= count for res, count in required_resources.items())
+                            if not self.board.devCardStack: # Check if deck is empty
+                                current_turn_last_action_status = "error_no_dev_cards_left"
+                                current_turn_last_action_error_details = "Cannot buy development card: Deck is empty."
+                            elif not can_afford:
+                                missing_res_list = [f"{count} {res}" for res, count in required_resources.items() if currPlayer.resources.get(res, 0) < count]
+                                current_turn_last_action_status = "error_insufficient_resources"
+                                current_turn_last_action_error_details = f"Cannot buy development card: Insufficient resources. You have {currPlayer.resources}, need {required_resources}. Missing: {', '.join(missing_res_list)}."
+                            elif currPlayer.draw_devCard(self.board):
+                                current_turn_last_action_status = "success"
+                                current_turn_last_action_error_details = "Successfully bought a development card."
+                            else: # Should not happen if previous checks pass unless draw_devCard has other logic
+                                current_turn_last_action_status = "error_unknown_failure"
+                                current_turn_last_action_error_details = "Failed to buy development card for an unknown reason."
 
                         elif action_type == "trade_with_bank":
                             res_give, res_receive = action.get("resource_to_give", "").upper(), action.get("resource_to_receive", "").upper()
@@ -1291,6 +1291,7 @@ class catanAIGame():
                                     current_turn_last_action_status = "error_unknown_failure"
                                     current_turn_last_action_error_details = f"Bank trade of {res_give} for {res_receive} failed. Player.trade_with_bank returned false."
 
+                        # ... (rest of the code for propose_trade and play_knight_card)
                         elif action_type == "propose_trade":
                             partner_name = action.get("partner_player_name")
                             offered = action.get("resources_offered", {})

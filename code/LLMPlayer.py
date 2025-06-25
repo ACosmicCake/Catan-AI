@@ -326,37 +326,58 @@ Ensure your entire response is a single valid JSON object.
                                         "properties": {
                                             "thoughts": {"type": "string"},
                                             "long_term_plan": {"type": "string"},
-                                    "turn_plan": {"type": "array", "items": {"type": "string"}},
+                                             "turn_plan": {"type": "array", "items": {"type": "string"}},
                                             "action": {
                                                 "type": "object",
                                                 "properties": {
                                                     "type": {"type": "string"},
-                                            "v1_index": {"type": "integer"}, "v2_index": {"type": "integer"},
-                                            "vertex_index": {"type": "integer"}, "hex_index": {"type": "integer"},
+                                                     "v1_index": {"type": "integer"}, "v2_index": {"type": "integer"},
+                                                     "vertex_index": {"type": "integer"}, "hex_index": {"type": "integer"},
                                                     "player_to_rob_name": {"type": "string"},
-                                            "resources": {"type": "object", "additionalProperties": {"type": "integer"}},
-                                            "resource_to_give": {"type": "string"}, "resource_to_receive": {"type": "string"},
+                                                     "resources": {
+                                                         "type": "object",
+                                                         "properties": {
+                                                             "WOOD": {"type": "integer"},
+                                                             "BRICK": {"type": "integer"},
+                                                             "SHEEP": {"type": "integer"},
+                                                             "WHEAT": {"type": "integer"},
+                                                             "ORE": {"type": "integer"}
+                                                         }
+                                                     },
+                                                     "resource_to_give": {"type": "string"}, "resource_to_receive": {"type": "string"},
                                                     "partner_player_name": {"type": "string"},
-                                            "resources_offered": {"type": "object", "additionalProperties": {"type": "integer"}},
-                                            "resources_requested": {"type": "object", "additionalProperties": {"type": "integer"}},
-                                            "recipient_name": {"type": "string"}, "opening_message": {"type": "string"},
-                                            "message": {"type": "string"},
-                                            # For advanced diplomatic actions
-                                            "target_player_name": {"type": "string"}, # For offer_non_binding_deal, request_embargo
-                                            "deal_description": {"type": "string"},   # For offer_non_binding_deal
-                                            "reasoning": {"type": "string"},          # For request_embargo
-                                            "information": {"type": "string"}         # For share_information
+                                                     "resources_offered": {
+                                                         "type": "object",
+                                                         "properties": {
+                                                             "WOOD": {"type": "integer"}, "BRICK": {"type": "integer"},
+                                                             "SHEEP": {"type": "integer"}, "WHEAT": {"type": "integer"}, "ORE": {"type": "integer"}
+                                                         }
+                                                     },
+                                                     "resources_requested": {
+                                                         "type": "object",
+                                                         "properties": {
+                                                             "WOOD": {"type": "integer"}, "BRICK": {"type": "integer"},
+                                                             "SHEEP": {"type": "integer"}, "WHEAT": {"type": "integer"}, "ORE": {"type": "integer"}
+                                                         }
+                                                     },
+                                                     "recipient_name": {"type": "string"}, "opening_message": {"type": "string"},
+                                                     "message": {"type": "string"},
+                                                     # For advanced diplomatic actions
+                                                     "target_player_name": {"type": "string"}, # For offer_non_binding_deal, request_embargo
+                                                     "deal_description": {"type": "string"},   # For offer_non_binding_deal
+                                                     "reasoning": {"type": "string"},          # For request_embargo
+                                                     "information": {"type": "string"}         # For share_information
                                                 },
                                                 "required": ["type"]
                                             }
                                         },
-                                "required": ["thoughts", "long_term_plan", "turn_plan", "action"]
+                                         "required": ["thoughts", "long_term_plan", "turn_plan", "action"]
                                     }
                                 }
                             )
                             raw_llm_response_text_for_thoughts = response.text
                             llm_response_json_str = self._strip_markdown_json(raw_llm_response_text_for_thoughts)
-                    self.thoughts = f"Gemini ({self.name}) response: {llm_response_json_str[:200]}..." # Truncate for print
+                            self.thoughts = f"Gemini ({self.name}) response: {llm_response_json_str[:200]}..." # Truncate for print
                             print(f"SUCCESS: Gemini API call for {self.name} completed using genai.Client.")
                         except Exception as e:
                             self.thoughts = f"Error during Gemini API call for {self.name} (genai.Client): {e}"

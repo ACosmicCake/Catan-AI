@@ -39,8 +39,9 @@ class modelState():
                  # Negotiation specific flags passed during construction if this state is for a negotiation turn
                  is_negotiation_turn: bool = False,
                  negotiation_partner_name: str = None):
-        self.board = self.get_board_state(catan_game.board) # Gets initial board state including choke points placeholder for hex_control
-        self.players = self.get_players_state(catan_game, current_player, catan_game.board) # Pass full game for maxPoints access
+        # First, get the players state
+        self.players = self.get_players_state(catan_game, current_player, catan_game.board)
+        self.board = self.get_board_state(catan_game.board, self.players) # Gets initial board state including choke points placeholder for hex_control
 
         # Calculate hex_control now that both board and player states (with settlement/city locations) are available
         # Need pixel_to_vertex_index_map for _calculate_hex_control
@@ -245,7 +246,7 @@ class modelState():
 
         return actions
 
-    def get_board_state(self, board_obj):
+    def get_board_state(self, board_obj, all_players_states): # Added all_players_states argument
         hexes = []
         robber_location_hex_index = -1
         for hex_index, hex_tile in board_obj.hexTileDict.items():
@@ -336,7 +337,7 @@ class modelState():
         best_unoccupied_settlement_spots = []
         # Create a set of all occupied vertex indices for quick lookup
         occupied_vertex_indices = set()
-        for p_state in self.players: # self.players should be populated before this method is finalized
+        for p_state in all_players_states: # Use the passed argument
             occupied_vertex_indices.update(p_state["settlements_vertex_indices"])
             occupied_vertex_indices.update(p_state["cities_vertex_indices"])
 
@@ -547,7 +548,7 @@ class modelState():
 
                 # dev_cards_bought = original_player_object.developmentCardsBought # If tracked
                 # Using knights_played and unrevealed dev cards as proxy
-                dev_cards_metric = player_state["knights_played"] + sum(player_state["dev_cards"].values())
+                dev_cards_metric = player_state["knights_played"] + sum(player_state["dev_cards_counts"].values())
 
 
                 postures = []
@@ -567,10 +568,10 @@ class modelState():
 
 
                 # 3. Enhanced Threat Level
-                vp = player_state["victory_points"]
+                vp = player_state["total_victory_points"]
                 knights = player_state["knights_played"]
                 num_resource_cards = sum(original_player_object.resources.values())
-                num_dev_cards_unplayed = sum(player_state["dev_cards"].values()) # Already in player_state
+                num_dev_cards_unplayed = sum(player_state["dev_cards_counts"].values()) # Already in player_state
 
                 base_threat = (vp * 3) + (knights * 1.5) + (road_segments_count * 0.2) + \
                               ((num_resource_cards + num_dev_cards_unplayed) * 0.5)

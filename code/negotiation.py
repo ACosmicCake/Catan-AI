@@ -62,7 +62,7 @@ class NegotiationManager:
         print(f"Offer accepted by {accepting_player.name} at turn {game_turn}. Last offer was: {last_offer}")
         return True
 
-    def reject_offer(self, rejecting_player, reason: str = "No reason given.", game_turn: int):
+    def reject_offer(self, rejecting_player, game_turn: int, reason: str = "No reason given."):
         if self.current_state not in ["PROPOSED", "COUNTERED"]:
             # Allow rejection even if state is already ended, as a final explicit act.
             # print(f"Warning: Rejecting offer in state {self.current_state}")
@@ -85,7 +85,7 @@ class NegotiationManager:
         print(f"Offer rejected by {rejecting_player.name} at turn {game_turn}. Reason: {reason}. Last offer: {last_offer}")
         return True
 
-    def end_negotiation_by_player(self, player_ending, reason: str = "Player chose to end.", game_turn: int):
+    def end_negotiation_by_player(self, player_ending, game_turn: int, reason: str = "Player chose to end."):
         if self.current_state == "IDLE" or self.current_state.startswith("ENDED_"):
             print(f"Negotiation already ended or idle. Current state: {self.current_state}")
             return False # Or True if we consider it "successfully ended"
@@ -102,7 +102,7 @@ class NegotiationManager:
         print(f"Negotiation ended by {player_ending.name} at turn {game_turn}. Reason: {reason}")
         return True
 
-    def end_negotiation_by_system(self, reason: str, game_turn: int):
+    def end_negotiation_by_system(self, game_turn: int, reason: str):
         if self.current_state == "IDLE" or self.current_state.startswith("ENDED_"):
             # This might happen if system tries to end an already concluded negotiation, e.g. timeout after player accept/reject
             print(f"Negotiation already ended or idle. Current state: {self.current_state}. System tried to end for: {reason}")
@@ -212,4 +212,4 @@ if __name__ == '__main__':
     print(f"Last offer in manager3: {manager3.get_last_offer()}")
     print(f"History of manager3: {json.dumps(manager3.history, indent=2)}")
 
-```
+
