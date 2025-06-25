@@ -124,26 +124,32 @@ class catanAIGame():
                 playerName = f"{llm_type.capitalize()}-AI-{i+1}"
 
                 # Persona Selection
-                chosen_persona = None
+                chosen_persona_value = None # Store the actual persona string or None
+                persona_selection_complete = False
                 if llm_type in ["gemini", "chatgpt", "claude", "deepseek"]: # Assuming all LLMs can have personas
-                    while chosen_persona is None:
+                    while not persona_selection_complete:
                         try:
                             persona_choice_idx = input(persona_prompt_string.format(i+1)).strip()
                             persona_idx = int(persona_choice_idx) -1
                             if 0 <= persona_idx < len(available_personas):
-                                chosen_persona = available_personas[persona_idx]
-                                if chosen_persona == "None": chosen_persona = None # Set to None if "None" is chosen
+                                chosen_persona_name = available_personas[persona_idx]
+                                if chosen_persona_name == "None":
+                                    chosen_persona_value = None
+                                else:
+                                    chosen_persona_value = chosen_persona_name
+                                persona_selection_complete = True # Valid choice made, exit loop
                             else:
                                 print(f"Invalid persona choice. Please enter a number from 1 to {len(available_personas)}.")
                         except ValueError:
                             print("Invalid input. Please enter a number.")
                         except EOFError:
                             print("EOFError encountered during persona input. Defaulting to no persona.")
-                            chosen_persona = None # Default to no persona
-                            break
+                            chosen_persona_value = None # Default to no persona
+                            persona_selection_complete = True # Exit loop on EOF
+                            break # Explicitly break, though persona_selection_complete would also exit
 
-                print(f"Creating LLM Player: {playerName} with color {player_color}, type {llm_type}, and persona: {chosen_persona if chosen_persona else 'Default'}")
-                newPlayer = LLMPlayer(playerName, player_color, llm_type, persona=chosen_persona)
+                print(f"Creating LLM Player: {playerName} with color {player_color}, type {llm_type}, and persona: {chosen_persona_value if chosen_persona_value else 'Default'}")
+                newPlayer = LLMPlayer(playerName, player_color, llm_type, persona=chosen_persona_value)
 
             elif chosen_ai_details["type"] == "heuristic":
                 playerName = f"Heuristic-AI-{i+1}"
