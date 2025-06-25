@@ -11,8 +11,9 @@ from negotiation import NegotiationManager
 from gamelogic import GameLogicManager # Added import
 import queue
 import numpy as np
-import sys, pygame
+import sys, pygame  # <-- Make sure sys is imported
 import matplotlib.pyplot as plt
+import threading # <-- Add this
 
 from dotenv import load_dotenv
 load_dotenv() # Load environment variables from .env file
@@ -42,6 +43,12 @@ class catanAIGame():
         self.playerQueue = queue.Queue(self.numPlayers)
         self.gameSetup = True #Boolean to take care of setup phase
         self.player_to_move_robber = None # New flag: stores the player object
+
+# --- Add these lines for threading ---
+        self.llm_thread = None
+        self.llm_action_result = None
+        self.lock = threading.Lock()
+# --- End of new lines ---
 
         # Chat histories
         self.global_chat_history = []
@@ -76,6 +83,51 @@ class catanAIGame():
 
         return None
     
+    def get_llm_action_threaded(self, llm_player, model_state):
+        """Target function for the LLM thread. Calls the LLM and stores the result."""
+        action = llm_player.get_llm_move(model_state)
+        with self.lock:
+            self.llm_action_result = action
+
+    def get_llm_response_non_blocking(self, llm_player, model_state):
+        """
+        Starts a thread to get the LLM's action and enters a non-blocking
+        wait loop that keeps the GUI responsive. Returns the LLM's action.
+        """
+        if self.llm_thread is not None and self.llm_thread.is_alive():
+            print("Warning: A previous LLM thread was still alive. Waiting for it to complete.")
+            self.llm_thread.join()
+
+        with self.lock:
+            self.llm_action_result = None
+
+        self.llm_thread = threading.Thread(target=self.get_llm_action_threaded, args=(llm_player, model_state))
+        self.llm_thread.start()
+
+        print(f"Waiting for {llm_player.name} ({llm_player.llm_type}) to respond...")
+        # Non-blocking wait loop
+        while self.llm_thread.is_alive():
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    print("Game quit during LLM API call.")
+                    pygame.quit()
+                    sys.exit()
+
+            self.boardView.displayGameScreen()
+            pygame.display.flip()
+            pygame.time.wait(100) # 100ms delay to prevent high CPU usage
+
+        self.llm_thread.join()
+        self.llm_thread = None
+
+        with self.lock:
+            result = self.llm_action_result
+
+        if result is None:
+            print(f"CRITICAL: LLM thread for {llm_player.name} finished but result is None. Defaulting to end_turn.")
+            return {"thoughts": "Error: LLM response was None.", "action": {"type": "end_turn"}}
+
+        return result
 
     #Function to initialize players + build initial settlements for players
     def build_initial_settlements(self):
@@ -200,7 +252,7 @@ class catanAIGame():
 
                     current_model_state_settlement = modelState(self, player_i) # Will pick up feedback from player_i
 
-                    action_settlement = player_i.get_llm_move(current_model_state_settlement)
+                    action_settlement = self.get_llm_response_non_blocking(player_i, current_model_state_settlement)
                     print(f"{player_i.name} (Thoughts for settlement: {player_i.thoughts}) -> Action: {action_settlement}")
                     action_type = action_settlement.get("type")
                     v_idx = action_settlement.get("vertex_index")
@@ -267,7 +319,7 @@ class catanAIGame():
                                                               setup_road_placement_pending=True,
                                                               last_settlement_vertex_index=placed_settlement_v_idx)
 
-                        action_road = player_i.get_llm_move(current_model_state_road)
+                        action_road = self.get_llm_response_non_blocking(player_i, current_model_state_road)
                         print(f"{player_i.name} (Thoughts for road: {player_i.thoughts}) -> Action: {action_road}")
                         action_type_road = action_road.get("type")
                         v1_idx_road = action_road.get("v1_index")
@@ -333,7 +385,7 @@ class catanAIGame():
 
                     current_model_state_settlement = modelState(self, player_i) # Will pick up feedback
 
-                    action_settlement = player_i.get_llm_move(current_model_state_settlement)
+                    action_settlement = self.get_llm_response_non_blocking(player_i, current_model_state_settlement)
                     print(f"{player_i.name} (Thoughts for 2nd settlement: {player_i.thoughts}) -> Action: {action_settlement}")
                     action_type = action_settlement.get("type")
                     v_idx = action_settlement.get("vertex_index")
@@ -390,7 +442,7 @@ class catanAIGame():
                                                               setup_road_placement_pending=True,
                                                               last_settlement_vertex_index=placed_settlement_v_idx)
 
-                        action_road = player_i.get_llm_move(current_model_state_road)
+                        action_road = self.get_llm_response_non_blocking(player_i, current_model_state_road)
                         print(f"{player_i.name} (Thoughts for 2nd road: {player_i.thoughts}) -> Action: {action_road}")
                         action_type_road = action_road.get("type")
                         v1_idx_road = action_road.get("v1_index")
@@ -710,7 +762,7 @@ class catanAIGame():
             chat_state = modelState(self, current_speaker, private_chat_active=True, communication_phase_active=False)
 
             print(f"--- Private Chat: {current_speaker.name}'s turn to speak to {other_speaker.name} ---")
-            response_action = current_speaker.get_llm_move(chat_state)
+            response_action = self.get_llm_response_non_blocking(current_speaker, chat_state)
             action_type = response_action.get("type")
             message_content = response_action.get("message") # For send_private_message
 
@@ -769,7 +821,7 @@ class catanAIGame():
                                            # is_negotiation_turn=True, # No longer needed directly for modelState
                                            # negotiation_partner_name=other_llm_negotiator.name) # No longer needed
 
-            action = current_llm_negotiator.get_llm_move(negotiation_model_state)
+            action = self.get_llm_response_non_blocking(current_llm_negotiator, negotiation_model_state)
             action_type = action.get("type")
             print(f"{current_llm_negotiator.name} (Negotiation Thoughts: {current_llm_negotiator.thoughts}) -> Action: {action}")
 
@@ -939,7 +991,7 @@ class catanAIGame():
                         # For now, let's assume modelState correctly uses game.communication_phase_active via the 'self' (catan_game) passed.
                         # The LLMPlayer's _construct_prompt already checks game_state_obj.communication_phase_active
 
-                        comm_action = player_speaker.get_llm_move(comm_state) # LLM decides if it wants to speak
+                        comm_action = self.get_llm_response_non_blocking(player_speaker, comm_state) # LLM decides if it wants to speak
 
                         if comm_action and comm_action.get("type") == "send_global_message":
                             message = comm_action.get("message")
@@ -984,7 +1036,7 @@ class catanAIGame():
                             print(f"Player {p_discarding.name} must discard {required_discard_num} cards.")
                             if isinstance(p_discarding, LLMPlayer):
                                 state_for_discard = modelState(self, p_discarding, discard_is_mandatory=True, num_cards_to_discard=required_discard_num)
-                                discard_action = p_discarding.get_llm_move(state_for_discard)
+                                discard_action = self.get_llm_response_non_blocking(p_discarding, state_for_discard)
                                 print(f"{p_discarding.name} (Discard Thoughts: {p_discarding.thoughts}) -> Discard Action: {discard_action}")
 
                                 executed_discard = False
@@ -1026,7 +1078,7 @@ class catanAIGame():
                     print(f"{currPlayer.name} must move the robber.")
                     if isinstance(currPlayer, LLMPlayer):
                         state_for_robber = modelState(self, currPlayer, robber_movement_is_mandatory=True)
-                        robber_action = currPlayer.get_llm_move(state_for_robber)
+                        robber_action = self.get_llm_response_non_blocking(currPlayer, state_for_robber)
                         print(f"{currPlayer.name} (Robber Thoughts: {currPlayer.thoughts}) -> Robber Action: {robber_action}")
                         # ... (rest of robber execution logic from previous step, including fallback)
                         executed_robber_move = False
@@ -1085,7 +1137,7 @@ class catanAIGame():
                         # Create modelState for the current action. It picks up feedback from the *previous action in this turn*
                         # or from mandatory actions (discard/robber) if this is the first action in the multi-action loop.
                         state_for_current_action = modelState(self, currPlayer, private_chat_active=False, communication_phase_active=False)
-                        action = currPlayer.get_llm_move(state_for_current_action)
+                        action = self.get_llm_response_non_blocking(currPlayer, state_for_current_action)
                         print(f"{currPlayer.name} (Turn Action {actions_this_turn}, Thoughts: {currPlayer.thoughts}) -> Action: {action}")
 
                         action_type = action.get("type")
