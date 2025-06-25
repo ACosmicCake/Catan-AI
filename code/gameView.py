@@ -37,8 +37,8 @@ COLOR_DICT_RGB = {
 # Player Resource Panel - Improved Spacing and Look
 PLAYER_PANEL_X_MARGIN = 20 # Margin from right edge of the screen
 PLAYER_PANEL_Y_START = 20
-PLAYER_PANEL_WIDTH = 220 # Slightly wider for more space
-PLAYER_PANEL_HEIGHT_PER_PLAYER = 160 # Increased height for more content and spacing
+PLAYER_PANEL_WIDTH = 240 # Increased width
+PLAYER_PANEL_HEIGHT_PER_PLAYER = 225 # Final adjustment for sufficient content and padding
 PLAYER_PANEL_SPACING = 15 # Space between player panels
 PLAYER_PANEL_BG = pygame.Color(230, 230, 230, 220) # Semi-transparent light grey
 PLAYER_PANEL_TEXT_COLOR = COLOR_TEXT_DARK
@@ -89,8 +89,9 @@ class catanGameView():
         self.game = catanGameObject
 
         # Adjust screen size if needed, or ensure board.size is adequate
-        self.screen_width = self.board.size[0] if self.board.size[0] >= 1000 else 1000 # Min width for panels
-        self.screen_height = self.board.size[1] if self.board.size[1] >= 700 else 700  # Min height
+        board_w, board_h = self.board.size
+        self.screen_width = board_w if board_w >= 1280 else 1280 # Increased Min width
+        self.screen_height = board_h if board_h >= 800 else 800  # Increased Min height
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         pygame.display.set_caption('Settlers of Catan - AI Edition')
 
